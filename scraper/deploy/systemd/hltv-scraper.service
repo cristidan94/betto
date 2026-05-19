@@ -1,0 +1,12 @@
+[Unit]
+Description=HLTV scraper run
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/betto/scraper
+EnvironmentFile=/opt/betto/scraper/.env
+ExecStart=/opt/betto/scraper/.venv/bin/python -m scraper.cli run
+ExecStartPost=/opt/betto/scraper/.venv/bin/python -m scraper.cli backup --out-dir /opt/betto/scraper/backups
+Nice=10

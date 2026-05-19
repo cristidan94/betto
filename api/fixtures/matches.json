@@ -1,0 +1,11 @@
+{
+  "date": "2026-05-16",
+  "matches": [
+    { "id": "PM-cs-2891", "label": "NAVI vs G2", "tier": "T1", "format": "Bo3", "start": "13:56", "start_in": "2h 14m", "regime": "LAN", "veto": "open", "open_markets": 5, "recommendations": 2, "exposure_pct": 4.2, "best_edge": 0.067 },
+    { "id": "PM-cs-2904", "label": "Vitality vs Spirit", "tier": "T1", "format": "Bo3", "start": "15:44", "start_in": "4h 02m", "regime": "LAN", "veto": "open", "open_markets": 4, "recommendations": 1, "exposure_pct": 0.9, "best_edge": 0.057 },
+    { "id": "PM-cs-2912", "label": "FaZe vs MOUZ", "tier": "T1", "format": "Bo5", "start": "17:40", "start_in": "6h", "regime": "LAN", "veto": "partial", "open_markets": 5, "recommendations": 1, "exposure_pct": 0.8, "best_edge": 0.041 },
+    { "id": "PM-cs-2934", "label": "Astralis vs Heroic", "tier": "T1", "format": "Bo3", "start": "19:30", "start_in": "8h", "regime": "online", "veto": "open", "open_markets": 4, "recommendations": 1, "exposure_pct": 0.6, "best_edge": 0.042 },
+    { "id": "PM-cs-2941", "label": "FURIA vs Liquid", "tier": "T2", "format": "Bo3", "start": "22:40", "start_in": "11h", "regime": "online", "veto": "open", "open_markets": 3, "recommendations": 1, "exposure_pct": 1.1, "best_edge": 0.049 },
+    { "id": "PM-cs-2950", "label": "ENCE vs paiN", "tier": "T2", "format": "Bo1", "start": "02:10+1", "start_in": "14h 30m", "regime": "online", "veto": "n/a", "open_markets": 1, "recommendations": 0, "exposure_pct": 0.0, "best_edge": 0.004 }
+  ]
+}

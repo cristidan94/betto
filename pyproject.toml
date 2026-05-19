@@ -1,0 +1,15 @@
+[project]
+name = "betto"
+version = "0.1.0"
+description = "CS-first betting alpha research and recommendation platform."
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2",
+  "pandas>=2",
+  "psycopg[binary]>=3.2",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.34"
+]
+
+[tool.unittest]
+start-dir = "tests"

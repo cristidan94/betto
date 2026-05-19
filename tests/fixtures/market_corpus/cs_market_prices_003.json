@@ -1,0 +1,19 @@
+[
+  {
+    "contest_hltv_id": "2370003",
+    "map_index": 1,
+    "team_hltv_id": "4608",
+    "best_bid": 0.62,
+    "best_ask": 0.64,
+    "taken_at": "2026-02-05T17:30:00Z"
+  },
+  {
+    "contest_hltv_id": "2370003",
+    "map_index": 1,
+    "team_hltv_id": "9565",
+    "best_bid": 0.36,
+    "best_ask": 0.38,
+    "taken_at": "2026-02-05T17:30:00Z"
+  }
+]
+

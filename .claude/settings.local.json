@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(frontend-design)",
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c \\\\\"SELECT migration_id FROM schema_migrations ORDER BY applied_at;\\\\\"\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c 'SELECT * FROM schema_migrations;'\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c \\\\\"SELECT 'feature_values' as tbl, count\\(*\\) FROM feature_values UNION ALL SELECT 'model_artifacts', count\\(*\\) FROM model_artifacts UNION ALL SELECT 'recommendations', count\\(*\\) FROM recommendations UNION ALL SELECT 'bets', count\\(*\\) FROM bets UNION ALL SELECT 'report_artifacts', count\\(*\\) FROM report_artifacts UNION ALL SELECT 'backtest_runs', count\\(*\\) FROM backtest_runs;\\\\\"\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c 'SELECT * FROM model_artifacts;'\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c 'SELECT recommendation_id, strategy_id, match_id, market_type, edge, model_prob, book_prob, confidence, status FROM recommendations;'\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c 'SELECT recommendation_id, strategy_id, market_id, edge::float, model_prob::float, market_prob::float, passes_filter, reason FROM recommendations;'\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c 'SELECT * FROM report_artifacts;'\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"PGPASSWORD=betto psql -h localhost -p 5433 -U betto -d betto -c '\\\\d feature_values'\")",
+      "Bash(findstr \"data\")",
+      "Skill(superpowers:brainstorming)",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\crist\\\\Desktop\\\\betto\\\\docs\\\\superpowers\\\\specs\")",
+      "PowerShell(New-Item *)",
+      "PowerShell(pip install *)",
+      "PowerShell(python --version)",
+      "PowerShell(python -m uvicorn api.main:app --host 0.0.0.0 --port 8000)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(dir \"%USERPROFILE%\\\\.kaggle\\\\kaggle.json\")",
+      "Bash(python *)",
+      "PowerShell(uvicorn api.main:app *)",
+      "PowerShell(python -c \"import typing_extensions; print\\(typing_extensions.__file__\\)\")",
+      "PowerShell(python -c \"import core.vendor; core.vendor.should_use_vendor = lambda: False; import uvicorn; uvicorn.run\\('api.main:app', host='127.0.0.1', port=8000, reload=False\\)\")",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(npm run *)"
+    ]
+  }
+}

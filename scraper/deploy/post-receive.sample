@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Sample Git server hook. Install this as hooks/post-receive in a bare repo.
+# It checks out the pushed branch into /opt/betto, then runs the VPS installer.
+#
+# Practical setup:
+#   1. Put the repo on the server once.
+#   2. Run bash deploy/install-vps.sh --run-live-test once so .env exists.
+#   3. Install this hook for future pushes.
+#
+# One-time hook setup example:
+#   sudo mkdir -p /opt/betto
+#   sudo chown "$USER:$USER" /opt/betto
+#   git init --bare ~/betto.git
+#   cp /opt/betto/scraper/deploy/post-receive.sample ~/betto.git/hooks/post-receive
+#   chmod +x ~/betto.git/hooks/post-receive
+#
+# Then from your laptop:
+#   git remote add vps user@server:~/betto.git
+#   git push vps main
+
+TARGET_DIR="${TARGET_DIR:-/opt/betto}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+
+while read -r oldrev newrev refname; do
+  branch="${refname#refs/heads/}"
+  if [[ "$branch" != "$DEPLOY_BRANCH" ]]; then
+    echo "Skipping $branch; deploy branch is $DEPLOY_BRANCH"
+    continue
+  fi
+
+  echo "Deploying $branch to $TARGET_DIR"
+  mkdir -p "$TARGET_DIR"
+  git --work-tree="$TARGET_DIR" --git-dir="$(pwd)" checkout -f "$branch"
+
+  cd "$TARGET_DIR/scraper"
+  bash deploy/install-vps.sh --project-dir "$TARGET_DIR"
+done

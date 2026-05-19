@@ -1,0 +1,67 @@
+{
+  "id": "PM-cs-2891",
+  "match": "NAVI vs G2",
+  "market": "NAVI to win match",
+  "strategy": "map-winner v1.4",
+  "model_prob": 0.583,
+  "market_prob": 0.516,
+  "edge": 0.067,
+  "size": 0.0180,
+  "confidence": "HIGH",
+  "stake_usd": 437.73,
+  "close": "2h 14m",
+  "format": "Bo3",
+  "regime": "LAN",
+  "veto": {
+    "state": "open",
+    "vetoed": 0,
+    "total": 2,
+    "maps": ["Mirage", "Anubis", "Nuke", "Inferno", "Ancient", "Dust2", "Vertigo"]
+  },
+  "derivatives": [
+    { "market": "NAVI to win match", "model_prob": 0.583, "market_prob": 0.516, "edge": 0.067, "size": 0.0180, "state": "recommend" },
+    { "market": "Map 1 (Mirage) - NAVI", "model_prob": 0.604, "market_prob": 0.553, "edge": 0.051, "size": 0.0120, "state": "add-on" },
+    { "market": "Map 2 (Anubis) - NAVI", "model_prob": 0.612, "market_prob": 0.555, "edge": 0.057, "size": 0.0120, "state": "add-on" },
+    { "market": "NAVI -1.5 maps", "model_prob": 0.348, "market_prob": 0.336, "edge": 0.012, "size": 0, "state": "below filter" },
+    { "market": "Over 2.5 maps", "model_prob": 0.412, "market_prob": 0.444, "edge": -0.032, "size": 0, "state": "opposite" },
+    { "market": "Pistol-round map 1 - NAVI CT", "model_prob": 0.553, "market_prob": 0.524, "edge": 0.029, "size": 0, "state": "below filter" }
+  ],
+  "features": [
+    { "label": "Team Elo delta", "value": 0.028 },
+    { "label": "Map pool asymmetry - Mir/Anu", "value": 0.021 },
+    { "label": "Recent form - 30d", "value": 0.014 },
+    { "label": "Rifler rating differential", "value": 0.011 },
+    { "label": "AWPer impact (s1mple)", "value": 0.009 },
+    { "label": "Format - Bo3 baseline", "value": 0.002 },
+    { "label": "G2 LAN penalty", "value": -0.004 },
+    { "label": "Schedule fatigue - day-2", "value": -0.005 }
+  ],
+  "sizing_trace": [
+    { "label": "Full Kelly", "value": 0.0870, "applied": false },
+    { "label": "x 1/4 fractional", "value": 0.0218, "applied": false },
+    { "label": "capped at 2.5% / bet", "value": 0.0218, "applied": false },
+    { "label": "correlated cap - per-match 5%", "value": 0.0180, "applied": true }
+  ],
+  "context": {
+    "roster_a": "stable - 142d",
+    "roster_b": "stable - 89d",
+    "stand_ins": "none",
+    "timezone_gap": "0h",
+    "schedule": "NAVI d2 - G2 d1",
+    "news_24h": "none"
+  },
+  "strategy_health": {
+    "clv_30d": 0.018,
+    "paper_roi_30d": 0.032,
+    "calibration_ece": 0.024,
+    "drift_ece": 0.03,
+    "days_since_refit": 9
+  },
+  "lineage": {
+    "model": "map-winner-v1.4",
+    "model_hash": "a8c3f1",
+    "feature_snapshot": "09:42:18",
+    "market_snapshot": "09:42:16",
+    "backtest_run": 214
+  }
+}

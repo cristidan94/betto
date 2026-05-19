@@ -1,0 +1,15 @@
+{
+  "sources": [
+    { "name": "Polymarket - markets", "kind": "ok", "fresh": "2s", "target": "<= 5s", "cadence": "every 2s", "rows": 14210, "last_error": "-", "on": true },
+    { "name": "Polymarket - orderbook", "kind": "ok", "fresh": "1s", "target": "<= 3s", "cadence": "every 1s", "rows": 8412, "last_error": "-", "on": true },
+    { "name": "HLTV - matches", "kind": "ok", "fresh": "4m", "target": "<= 10m", "cadence": "every 5m", "rows": 412, "last_error": "-", "on": true }
+  ],
+  "features": [
+    { "name": "cs.team.map_win_rate_90d", "fresh": "1m", "kind": "ok", "rows": 120 },
+    { "name": "Orderbook depth", "fresh": "2s", "kind": "ok", "rows": 8412 }
+  ],
+  "snapshot_lag": "2s",
+  "snapshot_count": 1800,
+  "schemas_ok": true,
+  "leakage_tests_ok": true
+}

@@ -1,0 +1,51 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments / secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+coverage/
+
+# Archives and large transfer bundles
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Betto local runtime
+.betto/
+*.db
+*.sqlite
+*.sqlite3
+data/*
+!data/.gitkeep
+
+# HLTV scraper local runtime
+scraper/.env
+scraper/.venv/
+scraper/venv/
+scraper/data/
+scraper/backups/
+scraper/tests/fixtures/*.html
+
+# Generated scraper outputs
+data/raw/hltv/
+data/hltv_scraped/
+data/hltv_scraper.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

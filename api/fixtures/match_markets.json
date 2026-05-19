@@ -1,0 +1,32 @@
+{
+  "PM-cs-2891": [
+    { "market": "NAVI to win match", "edge": 0.067, "size": 0.0180, "state": "recommend" },
+    { "market": "Map 1 (Mirage) - NAVI", "edge": 0.051, "size": 0.0120, "state": "add-on" },
+    { "market": "Map 2 (Anubis) - NAVI", "edge": 0.057, "size": 0.0120, "state": "add-on" },
+    { "market": "NAVI -1.5 maps", "edge": 0.012, "size": 0, "state": "below filter" },
+    { "market": "Over 2.5 maps", "edge": -0.032, "size": 0, "state": "opposite" }
+  ],
+  "PM-cs-2904": [
+    { "market": "Vitality -1.5 maps", "edge": 0.057, "size": 0.0090, "state": "recommend" },
+    { "market": "Vitality to win match", "edge": 0.021, "size": 0, "state": "below filter" },
+    { "market": "Map 1 (Nuke) - Spirit", "edge": 0.022, "size": 0, "state": "below filter" }
+  ],
+  "PM-cs-2912": [
+    { "market": "Over 2.5 maps", "edge": 0.041, "size": 0.0080, "state": "recommend" },
+    { "market": "FaZe to win match", "edge": 0.027, "size": 0, "state": "below filter" }
+  ],
+  "PM-cs-2934": [
+    { "market": "Map 1 Inferno - over 22.5 rounds", "edge": 0.042, "size": 0.0060, "state": "recommend" },
+    { "market": "Heroic to win match", "edge": -0.022, "size": 0, "state": "opposite" },
+    { "market": "Astralis to win match", "edge": 0.011, "size": 0, "state": "below filter" },
+    { "market": "Over 2.5 maps", "edge": 0.009, "size": 0, "state": "below filter" }
+  ],
+  "PM-cs-2941": [
+    { "market": "FURIA to win match", "edge": 0.049, "size": 0.0110, "state": "recommend" },
+    { "market": "Map 1 - FURIA", "edge": 0.031, "size": 0, "state": "below filter" },
+    { "market": "Over 2.5 maps", "edge": 0.018, "size": 0, "state": "below filter" }
+  ],
+  "PM-cs-2950": [
+    { "market": "ENCE to win", "edge": 0.004, "size": 0, "state": "below filter" }
+  ]
+}

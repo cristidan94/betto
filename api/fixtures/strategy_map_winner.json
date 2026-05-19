@@ -1,0 +1,21 @@
+{
+  "strategy_id": "map-winner",
+  "name": "Map Winner",
+  "version": "v1.4",
+  "mode": "paper",
+  "enabled": true,
+  "kpis": [
+    { "label": "7d recs", "value": "142", "hint": "20.3/day avg", "kind": null },
+    { "label": "CLV - 30d", "value": "+1.8%", "hint": "vs Polymarket close", "kind": "pos" },
+    { "label": "Paper ROI - 30d", "value": "+3.2%", "hint": "$748 on $23.5k", "kind": "pos" },
+    { "label": "Win rate", "value": "52.8%", "hint": "model 53.1%", "kind": null },
+    { "label": "Avg edge taken", "value": "4.7%", "hint": "median 3.9%", "kind": null },
+    { "label": "Capital bucket", "value": "8.0%", "hint": "of bankroll", "kind": null },
+    { "label": "Kill margin", "value": "0.42 sigma", "hint": "until auto-disarm", "kind": "warn" }
+  ],
+  "settled": [
+    { "when": "09:31", "market": "VIT vs SPR - Map 2", "clv": "+0.041", "result": "W", "kind": "pos" },
+    { "when": "08:48", "market": "G2 vs MOUZ - ML", "clv": "-0.018", "result": "L", "kind": "neg" },
+    { "when": "may 15 22:14", "market": "NAVI vs HER - ML", "clv": "+0.027", "result": "W", "kind": "pos" }
+  ]
+}

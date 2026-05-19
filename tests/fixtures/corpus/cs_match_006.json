@@ -1,0 +1,15 @@
+{
+  "hltv_id": "2370006",
+  "scheduled_at": "2026-03-20T18:00:00Z",
+  "best_of": 1,
+  "status": "finished",
+  "team_a": {"hltv_id": "4608", "name": "Natus Vincere", "aliases": ["NAVI"]},
+  "team_b": {"hltv_id": "9565", "name": "Vitality", "aliases": ["Team Vitality"]},
+  "event": {"hltv_id": "8001", "name": "Fixture Cup", "tier": "S"},
+  "players": [],
+  "maps": [
+    {"map_index": 1, "map_name": "Mirage", "team_a_score": 13, "team_b_score": 7, "winner_hltv_id": "4608"}
+  ],
+  "vetoes": []
+}
+

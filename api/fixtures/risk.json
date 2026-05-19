@@ -1,0 +1,23 @@
+{
+  "kpis": [
+    { "label": "Bankroll", "value": "$24,318.40", "hint": "+$112.20 today", "kind": "pos" },
+    { "label": "Portfolio exposure", "value": "7.4%", "hint": "cap 30% daily", "kind": null },
+    { "label": "Max drawdown 30d", "value": "-2.1%", "hint": "tol -10%", "kind": "neg" },
+    { "label": "Kill margin", "value": "0.42 sigma", "hint": "until auto-disarm", "kind": "warn" }
+  ],
+  "buckets": [
+    { "name": "map-winner v1", "used": 5.6, "cap": 8.0, "state": "on", "kind": "acc" },
+    { "name": "derivative scanner", "used": 1.4, "cap": 4.0, "state": "on", "kind": "pos" },
+    { "name": "cash reserve", "used": 64.0, "cap": 100.0, "state": "-", "kind": "flat" }
+  ],
+  "caps": [
+    { "label": "Max stake / bet", "value": "2.50%", "hint": "$608 of bankroll" },
+    { "label": "Kelly fraction", "value": "1/4", "hint": "conservative spec" },
+    { "label": "Live in-play", "value": "off", "hint": "spec: no v1 in-play" }
+  ],
+  "kill_switches": [
+    { "name": "global", "state": "armed", "trigger": "manual or any below trips", "kind": "ok" },
+    { "name": "map-winner v1", "state": "armed", "trigger": "CLV trend, calibration ECE > 0.07", "kind": "ok" },
+    { "name": "derivative scanner", "state": "watch", "trigger": "3 losers in a row", "kind": "warn" }
+  ]
+}

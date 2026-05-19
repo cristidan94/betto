@@ -1,0 +1,46 @@
+[
+  {
+    "contest_hltv_id": "2370001",
+    "map_index": 1,
+    "team_hltv_id": "4608",
+    "best_bid": 0.44,
+    "best_ask": 0.46,
+    "close_price": 0.52,
+    "liquidity_usd": 1200,
+    "resolved_team_hltv_id": "4608",
+    "taken_at": "2026-05-20T17:30:00Z"
+  },
+  {
+    "contest_hltv_id": "2370001",
+    "map_index": 1,
+    "team_hltv_id": "9565",
+    "best_bid": 0.54,
+    "best_ask": 0.56,
+    "close_price": 0.48,
+    "liquidity_usd": 1100,
+    "resolved_team_hltv_id": "4608",
+    "taken_at": "2026-05-20T17:30:00Z"
+  },
+  {
+    "contest_hltv_id": "2370001",
+    "map_index": 2,
+    "team_hltv_id": "4608",
+    "best_bid": 0.60,
+    "best_ask": 0.62,
+    "close_price": 0.44,
+    "liquidity_usd": 900,
+    "resolved_team_hltv_id": "9565",
+    "taken_at": "2026-05-20T18:30:00Z"
+  },
+  {
+    "contest_hltv_id": "2370001",
+    "map_index": 2,
+    "team_hltv_id": "9565",
+    "best_bid": 0.38,
+    "best_ask": 0.40,
+    "close_price": 0.57,
+    "liquidity_usd": 950,
+    "resolved_team_hltv_id": "9565",
+    "taken_at": "2026-05-20T18:30:00Z"
+  }
+]
