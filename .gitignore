@@ -49,3 +49,6 @@ data/hltv_scraper.db
 Thumbs.db
 .vscode/
 .idea/
+
+ignore
+ignore/*
