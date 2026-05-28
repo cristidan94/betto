@@ -40,6 +40,16 @@ MAP_STATS_HTML = """
 </table>
 """
 
+SCHEDULED_MATCH_HTML = """
+<html><body>
+  <div data-unix="1772539200000"></div>
+  <a href="/team/4608/navi">NAVI</a>
+  <a href="/team/6667/faze">FaZe</a>
+  <a href="/events/7148/iem-katowice">IEM Katowice</a>
+  <div>Best of 3</div>
+</body></html>
+"""
+
 
 class ScriptedFetcher(HltvFetcher):
     def __init__(self, db: TrackingDB, raw_dir: Path, responses: dict[str, FetchResult]) -> None:
@@ -92,6 +102,21 @@ class FetcherMatchScraperTests(unittest.TestCase):
         self.assertEqual(row_count, 0)
         self.assertTrue(needs_playwright)
 
+    def test_fetch_respects_daily_cap_before_network_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = TrackingDB(Path(tmp) / "queue.db")
+            fetcher = FallbackFetcher(db, Path(tmp) / "raw")
+            fetcher._limiter = RateLimiter(daily_cap=0)
+
+            result = fetcher.fetch("https://www.hltv.org/matches/2371234/navi-vs-faze")
+            row_count = db.request_count_today()
+            db.close()
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.fetcher_type, "rate_limiter")
+        self.assertEqual(fetcher.calls, [])
+        self.assertEqual(row_count, 0)
+
     def test_scrape_one_match_writes_raw_and_fixture_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -126,8 +151,39 @@ class FetcherMatchScraperTests(unittest.TestCase):
         self.assertEqual(row["stats_fetched"], 1)
         self.assertEqual(row["maps_fetched"], 1)
         self.assertEqual(row["parsed"], 1)
+        self.assertEqual(row["final"], 1)
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["kills"], 25)
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["deaths"], 18)
+
+    def test_scheduled_match_is_written_but_deferred_for_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = TrackingDB(root / "queue.db")
+            db.upsert_match("2371235", "/matches/2371235/navi-vs-faze")
+            fetcher = ScriptedFetcher(
+                db,
+                root / "raw",
+                {"/matches/2371235": FetchResult(200, SCHEDULED_MATCH_HTML, "fake", 1, len(SCHEDULED_MATCH_HTML))},
+            )
+            config = ScraperConfig(raw_dir=root / "raw", output_dir=root / "out", db_path=root / "queue.db")
+
+            scraped = scrape_one_match("2371235", "/matches/2371235/navi-vs-faze", fetcher, db, NoSleepLimiter(), config)
+            row = db.get_match("2371235")
+            pending = db.pending_matches(limit=10)
+            fixture_path = root / "out" / "2371235.json"
+            fixture_exists = fixture_path.exists()
+            db.close()
+
+        self.assertIsNotNone(scraped)
+        assert scraped is not None
+        self.assertEqual(scraped.status, "scheduled")
+        self.assertTrue(fixture_exists)
+        assert row is not None
+        self.assertEqual(row["parsed"], 1)
+        self.assertEqual(row["final"], 0)
+        self.assertEqual(row["lifecycle_status"], "scheduled")
+        self.assertIsNotNone(row["next_attempt_at"])
+        self.assertEqual(pending, [])
 
 
 if __name__ == "__main__":

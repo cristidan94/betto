@@ -34,8 +34,15 @@ class HltvFetcher:
         self._verify_tls = _env_verify_tls()
 
     def fetch(self, url: str) -> FetchResult:
+        if self._limiter.daily_cap_reached():
+            return FetchResult(0, "daily cap reached", "rate_limiter", 0, 17)
         if self._db.needs_playwright(extract_url_pattern(url)):
-            return self._fetch_playwright(url)
+            result = self._fetch_playwright(url)
+            if result.ok:
+                self._limiter.record_success()
+            else:
+                self._limiter.record_failure()
+            return result
         result = self._fetch_curl(url)
         if result.ok:
             self._limiter.record_success()
@@ -77,6 +84,7 @@ class HltvFetcher:
         elapsed = int((time.perf_counter() - start) * 1000)
         result = FetchResult(status, html, "curl_cffi", elapsed, len(html.encode("utf-8", errors="ignore")))
         self._db.log_request(url, result.status, result.fetcher_type, self._proxy.current_region, result.content_bytes, result.elapsed_ms)
+        self._limiter.record_request()
         return result
 
     def _fetch_playwright(self, url: str) -> FetchResult:
@@ -91,6 +99,7 @@ class HltvFetcher:
         elapsed = int((time.perf_counter() - start) * 1000)
         result = FetchResult(status, html, "playwright", elapsed, len(html.encode("utf-8", errors="ignore")))
         self._db.log_request(url, result.status, result.fetcher_type, self._proxy.current_region, result.content_bytes, result.elapsed_ms)
+        self._limiter.record_request()
         return result
 
     def _save_raw(self, match_id: str, filename: str, html: str) -> Path:

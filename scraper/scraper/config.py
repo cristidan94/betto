@@ -61,6 +61,7 @@ def load_config() -> ScraperConfig:
     if load_dotenv is not None:
         load_dotenv()
     regions_raw = os.environ.get("HLTV_PROXY_REGIONS", "us,eu,br")
+    allow_list_raw = os.environ.get("HLTV_EVENT_ALLOW_LIST")
     return ScraperConfig(
         proxy_url=os.environ.get("HLTV_PROXY_URL", ""),
         proxy_regions=[r.strip() for r in regions_raw.split(",") if r.strip()],
@@ -75,6 +76,7 @@ def load_config() -> ScraperConfig:
         quiet_hours_start=int(os.environ.get("HLTV_QUIET_HOURS_START", "3")),
         quiet_hours_end=int(os.environ.get("HLTV_QUIET_HOURS_END", "6")),
         verify_tls=_bool_env("HLTV_VERIFY_TLS", True),
+        event_allow_list=_split_csv(allow_list_raw) if allow_list_raw else list(EVENT_ALLOW_LIST),
     )
 
 
@@ -83,3 +85,7 @@ def _bool_env(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]

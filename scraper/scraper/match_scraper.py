@@ -20,6 +20,11 @@ from scraper.rate_limiter import RateLimiter
 from scraper.tracking_db import TrackingDB
 
 
+SCHEDULED_REFRESH_SECONDS = 6 * 60 * 60
+LIVE_REFRESH_SECONDS = 15 * 60
+INCOMPLETE_FINISHED_REFRESH_SECONDS = 60 * 60
+
+
 def scrape_one_match(
     match_id: str,
     match_url: str,
@@ -61,8 +66,30 @@ def scrape_one_match(
 
     scraped = _assemble_match(match_data, stats_data.get("players", []), map_stats)
     write_fixture_json(scraped, config.output_dir)
-    db.mark_parsed(match_id)
+    _update_lifecycle(db, scraped)
     return scraped
+
+
+def _update_lifecycle(db: TrackingDB, scraped: ScrapedMatch) -> None:
+    if scraped.status == "finished" and _finished_match_complete(scraped):
+        db.mark_lifecycle(scraped.hltv_id, status=scraped.status, final=True)
+        return
+    if scraped.status == "finished":
+        db.defer_match(scraped.hltv_id, status="finished_incomplete", delay_seconds=INCOMPLETE_FINISHED_REFRESH_SECONDS)
+        return
+    if scraped.status == "live":
+        db.defer_match(scraped.hltv_id, status=scraped.status, delay_seconds=LIVE_REFRESH_SECONDS)
+        return
+    db.defer_match(scraped.hltv_id, status=scraped.status, delay_seconds=SCHEDULED_REFRESH_SECONDS)
+
+
+def _finished_match_complete(scraped: ScrapedMatch) -> bool:
+    if not scraped.maps:
+        return False
+    maps_with_stats_ids = [item for item in scraped.maps if item.map_stats_id]
+    if not maps_with_stats_ids:
+        return True
+    return all(item.player_stats for item in maps_with_stats_ids)
 
 
 def _assemble_match(

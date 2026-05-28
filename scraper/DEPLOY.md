@@ -45,6 +45,24 @@ git push vps main
 
 The hook checks out `main` to `/opt/betto` and runs `bash deploy/install-vps.sh --project-dir /opt/betto`.
 
+## Updating From Git
+
+After the scraper is cloned on the VPS, deploy future code changes with:
+
+```bash
+cd /opt/betto/scraper
+bash deploy/update-vps.sh
+```
+
+That script runs:
+
+- `git pull`
+- `bash deploy/install-vps.sh --project-dir /opt/betto`
+- `sudo systemctl start hltv-scraper.service`
+- `journalctl -u hltv-scraper.service -n 100 --no-pager`
+
+Use `--branch main` if your GitHub branch is `main`, or `--no-start` if you only want to update code and timer files.
+
 ## Manual Ubuntu Setup
 
 ```bash
@@ -71,6 +89,7 @@ Edit `.env` and set your Decodo residential proxy credentials:
 ```env
 HLTV_PROXY_URL=http://username:password@gate.decodo.com:7000
 HLTV_DAILY_CAP=100
+HLTV_EVENT_ALLOW_LIST=PGL Major,BLAST.tv Major,IEM,Intel Extreme Masters,ESL Pro League,BLAST Premier,CS Asia Championships,CCT,YaLLa,Roobet
 ```
 
 ## Smoke Test
@@ -83,6 +102,17 @@ python -m scraper.cli test-live
 python -m scraper.cli run
 python -m scraper.cli backup
 ```
+
+## Queue Lifecycle
+
+The scraper keeps its queue in `data/hltv_scraper.db`.
+
+- Finished matches with complete map data are marked `final = 1` and are not scraped again.
+- Scheduled/live/incomplete matches are written to JSON but kept `final = 0` with a `next_attempt_at` refresh time.
+- Scheduled matches refresh after about 6 hours, live matches after about 15 minutes, and finished-but-incomplete matches after about 1 hour.
+- The daily cap is based on `request_log`, so it survives restarts and separate systemd runs on the same UTC day.
+
+When deploying a version that adds lifecycle columns, no manual migration is needed. The SQLite schema is migrated automatically on startup. Existing old rows may be refreshed once so the scraper can assign the new lifecycle state.
 
 ## Manual systemd Timer
 

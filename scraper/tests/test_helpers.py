@@ -24,11 +24,22 @@ class HelperTests(unittest.TestCase):
         rotator.end_sticky_session()
 
         limiter = RateLimiter(min_delay=1, max_delay=2, daily_cap=1)
-        limiter.next_delay()
+        limiter.record_request()
 
         self.assertIsNotNone(proxy)
         assert proxy is not None
         self.assertIn("session-", proxy)
+        self.assertTrue(limiter.daily_cap_reached())
+
+    def test_rate_limiter_initial_count_and_cooldown(self) -> None:
+        limiter = RateLimiter(min_delay=1, max_delay=2, cooldown_every=3, cooldown_seconds=30, daily_cap=5, initial_request_count=2)
+
+        self.assertEqual(limiter.next_delay(), 30.0)
+        self.assertFalse(limiter.daily_cap_reached())
+        limiter.record_request()
+        limiter.record_request()
+        limiter.record_request()
+
         self.assertTrue(limiter.daily_cap_reached())
 
 

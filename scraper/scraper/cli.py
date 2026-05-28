@@ -10,7 +10,7 @@ from scraper.backup import create_backup
 from scraper.config import load_config
 from scraper.discovery import discover_matches
 from scraper.fetcher import HltvFetcher
-from scraper.match_scraper import _assemble_match, scrape_one_match
+from scraper.match_scraper import _assemble_match, _update_lifecycle, scrape_one_match
 from scraper.parser import parse_match_page
 from scraper.pipeline import run_pipeline
 from scraper.preflight import collect_preflight
@@ -22,8 +22,9 @@ from scraper.tracking_db import TrackingDB
 def cmd_discover(args: argparse.Namespace) -> int:
     config = load_config()
     proxy = ProxyRotator(config.proxy_url, config.proxy_regions)
-    limiter = RateLimiter(config.min_delay, config.max_delay)
+    limiter = RateLimiter(config.min_delay, config.max_delay, config.cooldown_every, config.cooldown_seconds, config.daily_cap)
     db = TrackingDB(config.db_path)
+    limiter.request_count = db.request_count_today()
     fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
     try:
         count = discover_matches(fetcher, db, config, max_pages=args.limit or 10)
@@ -39,6 +40,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     proxy = ProxyRotator(config.proxy_url, config.proxy_regions)
     limiter = RateLimiter(config.min_delay, config.max_delay, config.cooldown_every, config.cooldown_seconds, config.daily_cap)
     db = TrackingDB(config.db_path)
+    limiter.request_count = db.request_count_today()
     fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
     fetched = 0
     try:
@@ -73,7 +75,7 @@ def cmd_parse(args: argparse.Namespace) -> int:
             match_data = parse_match_page(match_html.read_text(encoding="utf-8"), row["match_id"])
             scraped = _assemble_match(match_data, [], {})
             write_fixture_json(scraped, config.output_dir)
-            db.mark_parsed(row["match_id"])
+            _update_lifecycle(db, scraped)
             parsed += 1
     finally:
         db.close()

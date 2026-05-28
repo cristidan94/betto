@@ -27,6 +27,7 @@ class ConfigTests(unittest.TestCase):
                 "HLTV_DAILY_CAP": "100",
                 "HLTV_PROXY_REGIONS": "de,fr",
                 "HLTV_VERIFY_TLS": "false",
+                "HLTV_EVENT_ALLOW_LIST": "IEM,BLAST Premier,CCT",
             },
             clear=True,
         ):
@@ -37,6 +38,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.daily_cap, 100)
         self.assertEqual(config.proxy_regions, ["de", "fr"])
         self.assertFalse(config.verify_tls)
+        self.assertEqual(config.event_allow_list, ["IEM", "BLAST Premier", "CCT"])
 
     def test_event_allow_list_not_empty(self) -> None:
         config = load_config()

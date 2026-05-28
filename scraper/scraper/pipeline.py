@@ -28,7 +28,9 @@ def run_pipeline(config: ScraperConfig | None = None, max_discovery_pages: int =
         quiet_hours_end=config.quiet_hours_end,
     )
     db = TrackingDB(config.db_path)
+    requests_today = db.request_count_today()
     fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
+    limiter.request_count = requests_today
     try:
         if limiter.in_quiet_hours():
             return {"skipped": True, "reason": "quiet_hours"}

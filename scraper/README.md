@@ -38,11 +38,22 @@ See `DEPLOY.md` for VPS setup and the included systemd timer.
 
 If your proxy provider returns a self-signed certificate chain on the VPS, set `HLTV_VERIFY_TLS=false` in `.env` and rerun `preflight`.
 
+Queue lifecycle is stored in SQLite. Finished complete matches are final; scheduled, live, and incomplete matches are deferred and refreshed later.
+`HLTV_EVENT_ALLOW_LIST` can be set in `.env` to tune which event names discovery accepts.
+The request daily cap is persisted from SQLite request logs, so restarting the systemd service does not reset it.
+
 For a one-command VPS install after pushing the repo:
 
 ```bash
 cd /opt/betto/scraper
 HLTV_PROXY_URL='http://username:password@gate.decodo.com:7000' bash deploy/install-vps.sh --run-live-test
+```
+
+For later updates on the VPS:
+
+```bash
+cd /opt/betto/scraper
+bash deploy/update-vps.sh
 ```
 
 ## Testing

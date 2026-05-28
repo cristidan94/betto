@@ -28,7 +28,9 @@ class TrackingDbTests(unittest.TestCase):
         self.assertEqual(row["stats_fetched"], 1)
         self.assertEqual(row["maps_fetched"], 1)
         self.assertEqual(row["parsed"], 1)
+        self.assertEqual(row["final"], 1)
         self.assertEqual(stats["total"], 1)
+        self.assertEqual(stats["final"], 1)
 
     def test_pending_errors_requests_and_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -51,6 +53,25 @@ class TrackingDbTests(unittest.TestCase):
         self.assertEqual(row["retry_count"], 1)
         self.assertEqual(count, 1)
         self.assertTrue(needs_playwright)
+
+    def test_deferred_match_is_not_pending_until_due(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = TrackingDB(Path(tmp) / "test.db")
+            db.upsert_match("1", "/matches/1/a", scheduled_at="2026-05-01", priority_tier=1)
+            db.defer_match("1", status="scheduled", delay_seconds=3600)
+            pending = db.pending_matches(limit=10)
+            row = db.get_match("1")
+            stats = db.queue_stats()
+            db.close()
+
+        self.assertEqual(pending, [])
+        assert row is not None
+        self.assertEqual(row["parsed"], 1)
+        self.assertEqual(row["final"], 0)
+        self.assertEqual(row["lifecycle_status"], "scheduled")
+        self.assertIsNotNone(row["next_attempt_at"])
+        self.assertEqual(stats["parsed"], 1)
+        self.assertEqual(stats["final"], 0)
 
 
 if __name__ == "__main__":

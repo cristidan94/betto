@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -64,17 +64,44 @@ class TrackingDB:
         self._conn.commit()
 
     def mark_parsed(self, match_id: str) -> None:
-        self._mark(match_id, "parsed")
+        self.mark_lifecycle(match_id, status="finished", final=True)
+
+    def defer_match(self, match_id: str, status: str, delay_seconds: int) -> None:
+        self.mark_lifecycle(match_id, status=status, final=False, next_attempt_at=_now_plus(delay_seconds))
+
+    def mark_lifecycle(
+        self,
+        match_id: str,
+        status: str,
+        final: bool,
+        next_attempt_at: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE scrape_queue
+            SET
+              lifecycle_status = ?,
+              parsed = 1,
+              final = ?,
+              next_attempt_at = ?,
+              completed_at = CASE WHEN ? = 1 THEN ? ELSE completed_at END,
+              updated_at = ?
+            WHERE match_id = ?
+            """,
+            (status, 1 if final else 0, next_attempt_at, 1 if final else 0, _now(), _now(), match_id),
+        )
+        self._conn.commit()
 
     def pending_matches(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
             SELECT * FROM scrape_queue
-            WHERE parsed = 0
-            ORDER BY priority_tier ASC, COALESCE(scheduled_at, '') ASC, retry_count ASC, match_id ASC
+            WHERE final = 0
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY priority_tier ASC, COALESCE(next_attempt_at, '') ASC, COALESCE(scheduled_at, '') ASC, retry_count ASC, match_id ASC
             LIMIT ?
             """,
-            (limit,),
+            (_now(), limit),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -143,11 +170,12 @@ class TrackingDB:
               COUNT(*) AS total,
               SUM(CASE WHEN match_fetched = 1 THEN 1 ELSE 0 END) AS match_fetched,
               SUM(CASE WHEN stats_fetched = 1 THEN 1 ELSE 0 END) AS stats_fetched,
-              SUM(CASE WHEN parsed = 1 THEN 1 ELSE 0 END) AS parsed
+              SUM(CASE WHEN parsed = 1 THEN 1 ELSE 0 END) AS parsed,
+              SUM(CASE WHEN final = 1 THEN 1 ELSE 0 END) AS final
             FROM scrape_queue
             """
         ).fetchone()
-        return {key: int(row[key] or 0) for key in ("total", "match_fetched", "stats_fetched", "parsed")}
+        return {key: int(row[key] or 0) for key in ("total", "match_fetched", "stats_fetched", "parsed", "final")}
 
     def _mark(self, match_id: str, column: str) -> None:
         if column not in {"match_fetched", "stats_fetched", "parsed"}:
@@ -170,6 +198,10 @@ class TrackingDB:
               maps_total INTEGER NOT NULL DEFAULT 0,
               maps_fetched INTEGER NOT NULL DEFAULT 0,
               parsed INTEGER NOT NULL DEFAULT 0,
+              lifecycle_status TEXT,
+              final INTEGER NOT NULL DEFAULT 0,
+              next_attempt_at TEXT,
+              completed_at TEXT,
               retry_count INTEGER NOT NULL DEFAULT 0,
               last_error TEXT,
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -192,8 +224,25 @@ class TrackingDB:
             );
             """
         )
+        self._migrate_schema()
         self._conn.commit()
+
+    def _migrate_schema(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(scrape_queue)").fetchall()}
+        migrations = {
+            "lifecycle_status": "ALTER TABLE scrape_queue ADD COLUMN lifecycle_status TEXT",
+            "final": "ALTER TABLE scrape_queue ADD COLUMN final INTEGER NOT NULL DEFAULT 0",
+            "next_attempt_at": "ALTER TABLE scrape_queue ADD COLUMN next_attempt_at TEXT",
+            "completed_at": "ALTER TABLE scrape_queue ADD COLUMN completed_at TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in columns:
+                self._conn.execute(statement)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _now_plus(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
