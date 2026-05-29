@@ -777,6 +777,21 @@ This section is updated as each roadmap item is completed.
 - Complete: `scrape-teams` CLI added. Fetches HLTV team pages and extracts roster, coach, country, world ranking, and map win/loss stats. Stores raw HTML and parsed JSON.
 - Complete: `scrape-players` CLI added. Fetches HLTV player pages and extracts country, age, team, rating, DPR, KAST, impact, ADR, KPR, HS%, and maps played. Stores raw HTML and parsed JSON.
 
+### Scraper Completion (Pre-Collection Run)
+
+All 10 data gaps identified in the pre-collection audit have been fixed.
+
+1. **Upcoming match discovery** — Complete. Added `discover_upcoming()` and `discover-upcoming` CLI. Scrapes `hltv.org/matches` for scheduled and live matches with `is_live` flag.
+2. **Half scores** — Complete. Added `team_a_first_half`, `team_b_first_half`, `team_a_second_half`, `team_b_second_half` fields to `ScrapedMap`. Parser extracts "9:6 / 4:7" patterns from map score text.
+3. **Overtime detection** — Complete. Added `overtime: bool` field to `ScrapedMap`. Detected when total rounds > 30.
+4. **CT/T player stats** — Complete. Enhanced `parse_map_stats_page()` to extract side-specific tables and merge CT/T kills/deaths per player. Added `clutches_won` extraction via labeled-int search. `_player_stat()` now fills all side fields.
+5. **HLTV rankings scraper** — Complete. New `scraper/rankings.py` module with `scrape_rankings()`, `scrape_rankings_range()`, `parse_ranking_page()`. Stores weekly ranking snapshots as dated JSON. New `scrape-rankings` CLI with `--date`, `--start`, `--end` options.
+6. **Match stage/round** — Complete. Added `_match_stage()` to parser extracting "Grand Final", "Semifinal", "Group Stage", etc. Added `match_stage` field to `ScrapedMatch` and fixture JSON.
+7. **Head-to-head module** — Complete. Added `_head_to_head()` to parser extracting H2H win records from match pages. Added `head_to_head` field to `ScrapedMatch` and fixture JSON.
+8. **Stars from match pages** — Complete. Fixed `_event()` to call `_match_page_stars()` which extracts stars from `[stars]` attribute, filled star CSS classes, or text patterns.
+9. **Team recent results** — Complete. Added `_team_page_recent_results()` extracting recent match results with match_id, score, opponent, and event. Added `recent_results` field to team page output.
+10. **Player per-map stats and recent form** — Complete. Added `_player_page_map_stats()` for map-specific win/loss stats and `_player_page_recent_form()` for recent match form with map_stats_id, map name, rating, kills/deaths. Added `per_map_stats` and `recent_form` fields to player page output.
+
 ### Next
 
 All items complete.

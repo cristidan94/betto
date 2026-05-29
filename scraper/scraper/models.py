@@ -60,6 +60,11 @@ class ScrapedMap:
     team_b_score: int
     winner_hltv_id: str
     map_stats_id: str | None = None
+    team_a_first_half: int | None = None
+    team_b_first_half: int | None = None
+    team_a_second_half: int | None = None
+    team_b_second_half: int | None = None
+    overtime: bool = False
     player_stats: tuple[ScrapedPlayerMapStats, ...] = ()
 
 
@@ -84,6 +89,8 @@ class ScrapedMatch:
     maps: tuple[ScrapedMap, ...]
     vetoes: tuple[ScrapedVeto, ...]
     stats_url: str | None = None
+    match_stage: str | None = None
+    head_to_head: dict | None = None
 
 
 def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
@@ -105,6 +112,8 @@ def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
             {"hltv_id": p.hltv_id, "nickname": p.nickname, "team_hltv_id": p.team_hltv_id}
             for p in match.players
         ],
+        "match_stage": match.match_stage,
+        "head_to_head": match.head_to_head,
         "maps": [
             {
                 "map_index": m.map_index,
@@ -112,6 +121,11 @@ def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
                 "team_a_score": m.team_a_score,
                 "team_b_score": m.team_b_score,
                 "winner_hltv_id": m.winner_hltv_id,
+                "team_a_first_half": m.team_a_first_half,
+                "team_b_first_half": m.team_b_first_half,
+                "team_a_second_half": m.team_a_second_half,
+                "team_b_second_half": m.team_b_second_half,
+                "overtime": m.overtime,
                 "player_stats": {
                     ps.nickname: {
                         "kills": ps.kills,

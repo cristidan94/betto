@@ -31,13 +31,13 @@ class ModelTests(unittest.TestCase):
             players=(ScrapedPlayer("99", "ace", "1"),),
             maps=(
                 ScrapedMap(
-                    1,
-                    "Mirage",
-                    16,
-                    12,
-                    "1",
-                    "555",
-                    (
+                    map_index=1,
+                    map_name="Mirage",
+                    team_a_score=16,
+                    team_b_score=12,
+                    winner_hltv_id="1",
+                    map_stats_id="555",
+                    player_stats=(
                         ScrapedPlayerMapStats(
                             player_hltv_id="99",
                             nickname="ace",

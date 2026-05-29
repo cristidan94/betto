@@ -189,6 +189,11 @@ def _assemble_match(
                 team_b_score=int(row["team_b_score"]),
                 winner_hltv_id=str(row["winner_hltv_id"]),
                 map_stats_id=str(stats_id) if stats_id else None,
+                team_a_first_half=row.get("team_a_first_half"),
+                team_b_first_half=row.get("team_b_first_half"),
+                team_a_second_half=row.get("team_a_second_half"),
+                team_b_second_half=row.get("team_b_second_half"),
+                overtime=bool(row.get("overtime", False)),
                 player_stats=stats,
             )
         )
@@ -204,6 +209,8 @@ def _assemble_match(
         maps=tuple(maps),
         vetoes=tuple(ScrapedVeto(**row) for row in match_data.get("vetoes", [])),
         stats_url=match_data.get("stats_url"),
+        match_stage=match_data.get("match_stage"),
+        head_to_head=match_data.get("head_to_head"),
     )
 
 
@@ -249,6 +256,11 @@ def _player_stat(row: dict[str, Any]) -> ScrapedPlayerMapStats:
         kast_pct=_first_percent(cells),
         first_kills=_labeled_int(cells, "fk"),
         first_deaths=_labeled_int(cells, "fd"),
+        ct_kills=_safe_int(row.get("ct_kills")),
+        ct_deaths=_safe_int(row.get("ct_deaths")),
+        t_kills=_safe_int(row.get("t_kills")),
+        t_deaths=_safe_int(row.get("t_deaths")),
+        clutches_won=_labeled_int(cells, "clutch") or _labeled_int(cells, "1v"),
     )
 
 
@@ -320,6 +332,15 @@ def _labeled_int(cells: list[Any], label: str) -> int | None:
             value = _float_value(text)
             return int(value) if value is not None else None
     return None
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _float_value(value: Any) -> float | None:

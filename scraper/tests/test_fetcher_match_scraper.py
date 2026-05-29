@@ -247,5 +247,75 @@ class FetcherMatchScraperTests(unittest.TestCase):
         self.assertEqual(pending, [])
 
 
+class PlayerStatExtractionTests(unittest.TestCase):
+    def test_ct_t_stats_passed_through(self) -> None:
+        from scraper.match_scraper import _player_stat
+        row = {
+            "player_hltv_id": "7998",
+            "nickname": "s1mple",
+            "team_hltv_id": "4608",
+            "cells": ["s1mple", "25 - 18", "5", "88.5", "76.2%", "1.32"],
+            "ct_kills": 14,
+            "ct_deaths": 9,
+            "t_kills": 11,
+            "t_deaths": 9,
+        }
+        stat = _player_stat(row)
+        self.assertEqual(stat.ct_kills, 14)
+        self.assertEqual(stat.ct_deaths, 9)
+        self.assertEqual(stat.t_kills, 11)
+        self.assertEqual(stat.t_deaths, 9)
+
+    def test_clutches_extracted_from_cells(self) -> None:
+        from scraper.match_scraper import _player_stat
+        row = {
+            "player_hltv_id": "7998",
+            "nickname": "s1mple",
+            "team_hltv_id": "4608",
+            "cells": ["s1mple", "25 - 18", "5", "88.5", "76.2%", "2 clutch", "1.32"],
+        }
+        stat = _player_stat(row)
+        self.assertEqual(stat.clutches_won, 2)
+
+    def test_missing_ct_t_stats_are_none(self) -> None:
+        from scraper.match_scraper import _player_stat
+        row = {
+            "player_hltv_id": "7998",
+            "nickname": "s1mple",
+            "team_hltv_id": "4608",
+            "cells": ["s1mple", "25 - 18", "5", "88.5", "76.2%", "1.32"],
+        }
+        stat = _player_stat(row)
+        self.assertIsNone(stat.ct_kills)
+        self.assertIsNone(stat.t_kills)
+
+
+class StarsExtractionTests(unittest.TestCase):
+    def test_stars_from_match_page_with_attr(self) -> None:
+        from scraper.parser import parse_match_page
+        html = """<html><body>
+            <div data-unix="1772539200000"></div>
+            <a href="/team/4608/navi">NAVI</a>
+            <a href="/team/6667/faze">FaZe</a>
+            <a href="/events/7148/iem-katowice">IEM Katowice</a>
+            <div stars="5"></div>
+            <div>Best of 1</div>
+        </body></html>"""
+        data = parse_match_page(html, "123")
+        self.assertEqual(data["event"]["stars"], 5)
+
+    def test_stars_none_when_absent(self) -> None:
+        from scraper.parser import parse_match_page
+        html = """<html><body>
+            <div data-unix="1772539200000"></div>
+            <a href="/team/4608/navi">NAVI</a>
+            <a href="/team/6667/faze">FaZe</a>
+            <a href="/events/7148/iem-katowice">IEM Katowice</a>
+            <div>Best of 1</div>
+        </body></html>"""
+        data = parse_match_page(html, "123")
+        self.assertIsNone(data["event"]["stars"])
+
+
 if __name__ == "__main__":
     unittest.main()

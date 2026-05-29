@@ -8,11 +8,12 @@ from pathlib import Path
 
 from scraper.alerts import send_webhook
 from scraper.entity_scraper import scrape_events, scrape_players, scrape_teams
+from scraper.rankings import scrape_rankings, scrape_rankings_range
 from scraper.tier_registry import describe_registry, load_tier_registry
 from scraper.backup import create_backup
 from scraper.backfill import BACKFILL_DONE, BACKFILL_DONE_ALERTED, BACKFILL_EMPTY_PAGES, BACKFILL_NEXT_PAGE, run_backfill
 from scraper.config import load_config
-from scraper.discovery import discover_matches
+from scraper.discovery import discover_matches, discover_upcoming
 from scraper.fetcher import HltvFetcher
 from scraper.health import collect_health
 from scraper.inspect import show_match
@@ -41,6 +42,22 @@ def cmd_discover(args: argparse.Namespace) -> int:
     try:
         count = discover_matches(fetcher, db, config, max_pages=args.limit or 10)
         print(json.dumps({"discovered": count}))
+    finally:
+        fetcher.close()
+        db.close()
+    return 0
+
+
+def cmd_discover_upcoming(args: argparse.Namespace) -> int:
+    config = load_config()
+    proxy = ProxyRotator(config.proxy_url, config.proxy_regions)
+    limiter = RateLimiter(config.min_delay, config.max_delay, config.cooldown_every, config.cooldown_seconds, config.daily_cap)
+    db = TrackingDB(config.db_path)
+    limiter.request_count = db.request_count_today()
+    fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
+    try:
+        result = discover_upcoming(fetcher, db, config)
+        print(json.dumps(result, indent=2))
     finally:
         fetcher.close()
         db.close()
@@ -351,6 +368,31 @@ def cmd_scrape_players(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scrape_rankings(args: argparse.Namespace) -> int:
+    from datetime import date as _date
+
+    config = load_config()
+    proxy = ProxyRotator(config.proxy_url, config.proxy_regions)
+    limiter = RateLimiter(config.min_delay, config.max_delay, config.cooldown_every, config.cooldown_seconds, config.daily_cap)
+    db = TrackingDB(config.db_path)
+    limiter.request_count = db.request_count_today()
+    fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
+    try:
+        if args.start:
+            start = _date.fromisoformat(args.start)
+            end = _date.fromisoformat(args.end) if args.end else None
+            results = scrape_rankings_range(fetcher, limiter, config, start, end)
+            print(json.dumps(results, indent=2))
+        else:
+            ranking_date = _date.fromisoformat(args.date) if args.date else None
+            result = scrape_rankings(fetcher, limiter, config, ranking_date)
+            print(json.dumps(result, indent=2))
+    finally:
+        fetcher.close()
+        db.close()
+    return 0
+
+
 def cmd_tier_registry(args: argparse.Namespace) -> int:
     config = load_config()
     registry = load_tier_registry(config.tier_registry_path)
@@ -378,6 +420,9 @@ def main(argv: list[str] | None = None) -> int:
     disc = subparsers.add_parser("discover")
     disc.add_argument("--limit", type=int, default=10)
     disc.set_defaults(func=cmd_discover)
+
+    disc_upcoming = subparsers.add_parser("discover-upcoming")
+    disc_upcoming.set_defaults(func=cmd_discover_upcoming)
 
     fetch = subparsers.add_parser("fetch")
     fetch.add_argument("--limit", type=int, default=50)
@@ -493,6 +538,12 @@ def main(argv: list[str] | None = None) -> int:
     scrape_pl.add_argument("--ids", default=None, help="Comma-separated player IDs")
     scrape_pl.add_argument("--limit", type=int, default=100)
     scrape_pl.set_defaults(func=cmd_scrape_players)
+
+    scrape_rank = subparsers.add_parser("scrape-rankings")
+    scrape_rank.add_argument("--date", default=None, help="YYYY-MM-DD date (defaults to latest Monday)")
+    scrape_rank.add_argument("--start", default=None, help="Range start date YYYY-MM-DD")
+    scrape_rank.add_argument("--end", default=None, help="Range end date YYYY-MM-DD")
+    scrape_rank.set_defaults(func=cmd_scrape_rankings)
 
     tier_reg = subparsers.add_parser("tier-registry")
     tier_reg.set_defaults(func=cmd_tier_registry)

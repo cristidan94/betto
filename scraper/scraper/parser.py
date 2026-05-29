@@ -41,6 +41,70 @@ def parse_results_page(html: str) -> list[dict[str, Any]]:
     return unique
 
 
+def parse_upcoming_page(html: str) -> list[dict[str, Any]]:
+    if BeautifulSoup is None:
+        return _parse_upcoming_page_fallback(html)
+    soup = _soup(html)
+    entries: list[dict[str, Any]] = []
+    for link in soup.select("a[href*='/matches/']"):
+        href = link.get("href") or ""
+        match = re.search(r"/matches/(\d+)/([^?#]+)", href)
+        if not match:
+            continue
+        text = " ".join(link.get_text(" ", strip=True).split())
+        entries.append(
+            {
+                "match_id": match.group(1),
+                "match_url": href,
+                "title": text,
+                "event_name": _result_event_name(link),
+                "event_stars": _result_stars(link),
+                "scheduled_at": _result_datetime(link),
+                "is_live": _is_live_match(link),
+            }
+        )
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for entry in entries:
+        if entry["match_id"] not in seen:
+            seen.add(entry["match_id"])
+            unique.append(entry)
+    return unique
+
+
+def _is_live_match(link) -> bool:
+    parent = link.find_parent()
+    if parent:
+        text = parent.get_text(" ", strip=True).lower()
+        if "live" in text:
+            return True
+        if parent.select_one(".live-flag, .livescore, [class*=live]"):
+            return True
+    return False
+
+
+def _parse_upcoming_page_fallback(html: str) -> list[dict[str, Any]]:
+    entries = []
+    text_lower = html.lower()
+    for href, text, start in _anchors(html):
+        match = re.search(r"/matches/(\d+)/([^?#]+)", href)
+        if not match:
+            continue
+        context = html[max(0, start - 500): start]
+        entries.append(
+            {
+                "match_id": match.group(1),
+                "match_url": href,
+                "title": text,
+                "event_name": _event_name_from_context(context),
+                "event_stars": _stars_from_context(context),
+                "scheduled_at": None,
+                "is_live": "live" in context.lower(),
+            }
+        )
+    return _unique_entries(entries)
+
+
 def parse_match_page(html: str, match_id: str) -> dict[str, Any]:
     if BeautifulSoup is None:
         return _parse_match_page_fallback(html, match_id)
@@ -59,6 +123,8 @@ def parse_match_page(html: str, match_id: str) -> dict[str, Any]:
         "maps": maps,
         "vetoes": _vetoes(soup, teams),
         "stats_url": _stats_url(soup, teams),
+        "match_stage": _match_stage(soup),
+        "head_to_head": _head_to_head(soup, teams),
     }
 
 
@@ -83,15 +149,86 @@ def parse_map_stats_page(html: str) -> list[dict[str, Any]]:
         return _parse_map_stats_page_fallback(html)
     soup = _soup(html)
     rows: list[dict[str, Any]] = []
-    for row in soup.select("tr"):
-        link = row.select_one("a[href*='/player/']")
-        cells = [cell.get_text(" ", strip=True) for cell in row.select("td")]
-        if not link or len(cells) < 2:
-            continue
-        href = link.get("href") or ""
-        match = re.search(r"/player/(\d+)", href)
-        rows.append({"player_hltv_id": match.group(1) if match else "", "nickname": link.get_text(strip=True), "cells": cells})
+    team_hltv_id = ""
+    for table in soup.select("table"):
+        header = table.find_previous(["a", "div", "span"], href=re.compile(r"/team/\d+")) if table else None
+        if header:
+            m = re.search(r"/team/(\d+)", header.get("href") or "")
+            if m:
+                team_hltv_id = m.group(1)
+        for row in table.select("tr"):
+            link = row.select_one("a[href*='/player/']")
+            cells = [cell.get_text(" ", strip=True) for cell in row.select("td")]
+            if not link or len(cells) < 2:
+                continue
+            href = link.get("href") or ""
+            match = re.search(r"/player/(\d+)", href)
+            rows.append({
+                "player_hltv_id": match.group(1) if match else "",
+                "nickname": link.get_text(strip=True),
+                "team_hltv_id": team_hltv_id,
+                "cells": cells,
+            })
+    _merge_side_stats(soup, rows)
     return rows
+
+
+def _merge_side_stats(soup, rows: list[dict[str, Any]]) -> None:
+    side_tables = soup.select(".stats-table")
+    if not side_tables:
+        return
+    ct_data: dict[str, dict] = {}
+    t_data: dict[str, dict] = {}
+    for table in side_tables:
+        heading = table.find_previous(string=re.compile(r"\b(CT|T)\s*side", re.I))
+        if not heading:
+            container = table.find_parent(class_=re.compile(r"ct|terrorist", re.I))
+            if container:
+                cls = " ".join(container.get("class", []))
+                heading = "CT side" if "ct" in cls.lower() else "T side"
+        if not heading:
+            continue
+        side_label = "ct" if "ct" in str(heading).lower() else "t"
+        target = ct_data if side_label == "ct" else t_data
+        for tr in table.select("tr"):
+            link = tr.select_one("a[href*='/player/']")
+            cells = [td.get_text(" ", strip=True) for td in tr.select("td")]
+            if not link or len(cells) < 2:
+                continue
+            href = link.get("href") or ""
+            m = re.search(r"/player/(\d+)", href)
+            if m:
+                kd = _extract_kd_from_cells(cells)
+                target[m.group(1)] = kd
+    for row in rows:
+        pid = row.get("player_hltv_id")
+        if pid and pid in ct_data:
+            row["ct_kills"] = ct_data[pid].get("kills")
+            row["ct_deaths"] = ct_data[pid].get("deaths")
+        if pid and pid in t_data:
+            row["t_kills"] = t_data[pid].get("kills")
+            row["t_deaths"] = t_data[pid].get("deaths")
+
+
+def _extract_kd_from_cells(cells: list) -> dict[str, int | None]:
+    for cell in cells[1:4]:
+        text = str(cell)
+        m = re.search(r"(\d+)\s*[-/]\s*(\d+)", text)
+        if m:
+            return {"kills": int(m.group(1)), "deaths": int(m.group(2))}
+    kills = None
+    deaths = None
+    for i, cell in enumerate(cells[1:4], start=1):
+        try:
+            val = int(str(cell).strip().split()[0])
+            if kills is None:
+                kills = val
+            elif deaths is None:
+                deaths = val
+                break
+        except (ValueError, IndexError):
+            continue
+    return {"kills": kills, "deaths": deaths}
 
 
 def _soup(html: str):
@@ -135,6 +272,8 @@ def _parse_match_page_fallback(html: str, match_id: str) -> dict[str, Any]:
         "maps": maps,
         "vetoes": _fallback_vetoes(html, teams),
         "stats_url": _fallback_stats_url(html),
+        "match_stage": None,
+        "head_to_head": None,
     }
 
 
@@ -379,6 +518,8 @@ def _maps(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, 
     pattern = re.compile(r"(Mirage|Inferno|Nuke|Ancient|Anubis|Dust2|Train|Vertigo|Overpass|Cache|Cobblestone).*?(\d{1,2})\s*[-:]\s*(\d{1,2})", re.I)
     for index, match in enumerate(pattern.finditer(text), start=1):
         score_a, score_b = int(match.group(2)), int(match.group(3))
+        after = text[match.end():match.end() + 200]
+        halves = _parse_half_scores(after, score_a, score_b)
         maps.append(
             {
                 "map_index": index,
@@ -387,9 +528,34 @@ def _maps(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, 
                 "team_b_score": score_b,
                 "winner_hltv_id": teams[0]["hltv_id"] if score_a > score_b else teams[1]["hltv_id"],
                 "map_stats_id": map_stats_ids[index - 1] if index - 1 < len(map_stats_ids) else _map_stats_id_near(match.group(0)),
+                **halves,
             }
         )
     return maps
+
+
+def _parse_half_scores(text: str, total_a: int, total_b: int) -> dict[str, Any]:
+    half_pattern = re.compile(r"(\d{1,2})\s*[:;]\s*(\d{1,2})\s*[/|,]\s*(\d{1,2})\s*[:;]\s*(\d{1,2})")
+    match = half_pattern.search(text)
+    if match:
+        h1_a, h1_b = int(match.group(1)), int(match.group(2))
+        h2_a, h2_b = int(match.group(3)), int(match.group(4))
+        overtime = (total_a + total_b) > (h1_a + h1_b + h2_a + h2_b) or total_a + total_b > 30
+        return {
+            "team_a_first_half": h1_a,
+            "team_b_first_half": h1_b,
+            "team_a_second_half": h2_a,
+            "team_b_second_half": h2_b,
+            "overtime": overtime,
+        }
+    overtime = total_a + total_b > 30
+    return {
+        "team_a_first_half": None,
+        "team_b_first_half": None,
+        "team_a_second_half": None,
+        "team_b_second_half": None,
+        "overtime": overtime,
+    }
 
 
 def _soup_map_stats_ids(soup) -> list[str]:
@@ -429,7 +595,64 @@ def _event(soup) -> dict[str, Any]:
         return {"hltv_id": "unknown", "name": "Unknown Event", "stars": None}
     href = link.get("href") or ""
     match = re.search(r"/events/(\d+)", href)
-    return {"hltv_id": match.group(1) if match else "unknown", "name": link.get_text(" ", strip=True), "stars": None}
+    stars = _match_page_stars(soup)
+    return {"hltv_id": match.group(1) if match else "unknown", "name": link.get_text(" ", strip=True), "stars": stars}
+
+
+def _match_page_stars(soup) -> int | None:
+    star_attr = soup.select_one("[stars]")
+    if star_attr and star_attr.get("stars"):
+        try:
+            return int(star_attr["stars"])
+        except (ValueError, TypeError):
+            pass
+    filled = soup.select("i.fa-star:not(.faded), .star.filled, .star:not(.empty)")
+    if filled:
+        return len(filled)
+    text = soup.get_text(" ")
+    m = re.search(r"(\d)\s*(?:star|/5)", text, re.I)
+    if m:
+        val = int(m.group(1))
+        if 1 <= val <= 5:
+            return val
+    return None
+
+
+def _match_stage(soup) -> str | None:
+    el = soup.select_one(".match-header-vs-note, .matchInfoEmpty .text")
+    if el:
+        text = el.get_text(" ", strip=True)
+        if text and len(text) < 100:
+            return text
+    text = soup.get_text(" ", strip=True)
+    stage_pattern = re.compile(
+        r"(Grand Final|Semi[-\s]?final|Quarter[-\s]?final|"
+        r"Group\s*(?:Stage)?(?:\s*[A-D])?|"
+        r"Upper\s*(?:Bracket)?|Lower\s*(?:Bracket)?|"
+        r"Consolidation|Elimination|"
+        r"Round\s*of\s*\d+|"
+        r"Playoffs?|Opening\s*Match|"
+        r"Decider\s*Match|Winners?\s*Match|"
+        r"3rd\s*Place)",
+        re.I,
+    )
+    match = stage_pattern.search(text[:2000])
+    return match.group(0).strip() if match else None
+
+
+def _head_to_head(soup, teams: tuple[dict[str, str], dict[str, str]]) -> dict[str, Any] | None:
+    h2h_section = soup.select_one(".head-to-head, .past-matches, [class*=headtohead], [class*=h2h]")
+    if not h2h_section:
+        text = soup.get_text(" ", strip=True)
+        h2h_match = re.search(r"(?:Head\s*to\s*Head|H2H|Past\s*\d+\s*matches).*?(\d+)\s*[-:]\s*(\d+)", text[:3000], re.I)
+        if h2h_match:
+            return {"team_a_wins": int(h2h_match.group(1)), "team_b_wins": int(h2h_match.group(2))}
+        return None
+    text = h2h_section.get_text(" ", strip=True)
+    score_match = re.search(r"(\d+)\s*[-:]\s*(\d+)", text)
+    if score_match:
+        return {"team_a_wins": int(score_match.group(1)), "team_b_wins": int(score_match.group(2))}
+    return None
 
 
 def _best_of(soup, map_count: int) -> int:
@@ -550,6 +773,7 @@ def parse_team_page(html: str, team_id: str) -> dict[str, Any]:
         "coach": _team_page_coach(soup),
         "roster": _team_page_roster(soup),
         "map_stats": _team_page_map_stats(soup, text),
+        "recent_results": _team_page_recent_results(soup),
     }
 
 
@@ -573,6 +797,8 @@ def parse_player_page(html: str, player_id: str) -> dict[str, Any]:
         "kpr": _player_page_stat(text, r"KPR\s*([\d.]+)"),
         "headshot_pct": _player_page_stat(text, r"(?:HS|Headshot)\s*%?\s*([\d.]+)"),
         "maps_played": _player_page_int_stat(text, r"Maps\s*played\s*(\d+)"),
+        "per_map_stats": _player_page_map_stats(soup, text),
+        "recent_form": _player_page_recent_form(soup),
     }
 
 
@@ -783,6 +1009,35 @@ def _team_page_map_stats(soup, text: str) -> list[dict[str, Any]]:
     return stats
 
 
+def _team_page_recent_results(soup) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for link in soup.select("a[href*='/matches/']"):
+        href = link.get("href") or ""
+        match = re.search(r"/matches/(\d+)/", href)
+        if not match:
+            continue
+        text = link.get_text(" ", strip=True)
+        score_m = re.search(r"(\d+)\s*[-:]\s*(\d+)", text)
+        if not score_m:
+            continue
+        opponent = ""
+        opponent_el = link.select_one(".team-name, .opponent")
+        if opponent_el:
+            opponent = opponent_el.get_text(strip=True)
+        event_el = link.select_one(".event-name, .event")
+        event_name = event_el.get_text(strip=True) if event_el else ""
+        results.append({
+            "match_id": match.group(1),
+            "score_won": int(score_m.group(1)),
+            "score_lost": int(score_m.group(2)),
+            "opponent": opponent,
+            "event": event_name,
+        })
+        if len(results) >= 20:
+            break
+    return results
+
+
 def _parse_team_page_fallback(html: str, team_id: str) -> dict[str, Any]:
     text = _strip_tags(html)
     players: list[dict[str, str]] = []
@@ -801,6 +1056,7 @@ def _parse_team_page_fallback(html: str, team_id: str) -> dict[str, Any]:
         "coach": None,
         "roster": players[:7],
         "map_stats": [],
+        "recent_results": [],
     }
 
 
@@ -886,6 +1142,68 @@ def _player_page_int_stat(text: str, pattern: str) -> int | None:
     return None
 
 
+def _player_page_map_stats(soup, text: str) -> list[dict[str, Any]]:
+    stats: list[dict[str, Any]] = []
+    map_names = {"Mirage", "Inferno", "Nuke", "Ancient", "Anubis", "Dust2", "Train", "Vertigo", "Overpass", "Cache"}
+    for map_name in map_names:
+        pattern = re.compile(rf"{map_name}\s+(\d+)\s+/\s+(\d+)", re.I)
+        match = pattern.search(text)
+        if match:
+            maps_played = int(match.group(2))
+            wins = int(match.group(1))
+            stats.append({"map_name": map_name, "maps_played": maps_played, "wins": wins, "losses": maps_played - wins})
+    rating_pattern = re.compile(r"(\w+)\s+([\d.]+)\s*rating", re.I)
+    for match in rating_pattern.finditer(text):
+        name = match.group(1)
+        if name.capitalize() in map_names:
+            for entry in stats:
+                if entry["map_name"].lower() == name.lower():
+                    try:
+                        entry["rating"] = float(match.group(2))
+                    except ValueError:
+                        pass
+    return stats
+
+
+def _player_page_recent_form(soup) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for link in soup.select("a[href*='/stats/matches/mapstatsid/']"):
+        href = link.get("href") or ""
+        match = re.search(r"/mapstatsid/(\d+)", href)
+        if not match:
+            continue
+        text = link.get_text(" ", strip=True)
+        parent = link.find_parent("tr") or link.find_parent("div")
+        context = parent.get_text(" ", strip=True) if parent else text
+        rating_m = re.search(r"([\d.]+)\s*$", context.strip())
+        kd_m = re.search(r"(\d+)\s*[-/]\s*(\d+)", context)
+        results.append({
+            "map_stats_id": match.group(1),
+            "map_name": _extract_map_name(context),
+            "rating": float(rating_m.group(1)) if rating_m and _is_rating(rating_m.group(1)) else None,
+            "kills": int(kd_m.group(1)) if kd_m else None,
+            "deaths": int(kd_m.group(2)) if kd_m else None,
+        })
+        if len(results) >= 20:
+            break
+    return results
+
+
+def _extract_map_name(text: str) -> str | None:
+    for name in ("Mirage", "Inferno", "Nuke", "Ancient", "Anubis", "Dust2", "Train", "Vertigo", "Overpass", "Cache"):
+        if name.lower() in text.lower():
+            return name
+    return None
+
+
+def _is_rating(value: str) -> bool:
+    try:
+        f = float(value)
+        return 0.0 <= f <= 3.0
+    except ValueError:
+        return False
+
+
 def _parse_player_page_fallback(html: str, player_id: str) -> dict[str, Any]:
     text = _strip_tags(html)
     team = None
@@ -909,6 +1227,8 @@ def _parse_player_page_fallback(html: str, player_id: str) -> dict[str, Any]:
         "kpr": None,
         "headshot_pct": None,
         "maps_played": None,
+        "per_map_stats": [],
+        "recent_form": [],
     }
 
 

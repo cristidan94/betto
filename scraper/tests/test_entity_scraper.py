@@ -44,6 +44,8 @@ TEAM_HTML = """
     <a href="/player/13249/aleksib">Aleksib</a>
   </div>
   <div>Mirage 42 / 60 Inferno 30 / 50</div>
+  <a href="/matches/2371234/navi-vs-faze">2 - 1 <span class="team-name">FaZe</span> <span class="event-name">IEM</span></a>
+  <a href="/matches/2371235/navi-vs-g2">0 - 2 <span class="team-name">G2</span></a>
 </body></html>
 """
 
@@ -54,6 +56,8 @@ PLAYER_HTML = """
   <div class="playerAge"><span class="listRight">28 years</span></div>
   <div class="playerTeam"><a href="/team/4608/navi">NAVI</a></div>
   <div>Rating 2.0 1.25 DPR 0.62 KAST 73.5 Impact 1.31 ADR 82.4 KPR 0.85 HS 42.3% Maps played 1500</div>
+  <div>Mirage 25 / 40 Inferno 20 / 30</div>
+  <div><a href="/stats/matches/mapstatsid/98765/slug">Inferno 25 - 18 1.32</a></div>
 </body></html>
 """
 
@@ -105,6 +109,9 @@ class ParseTeamPageTests(unittest.TestCase):
         self.assertEqual(data["coach"]["nickname"], "b1ad3")
         self.assertEqual(len(data["roster"]), 5)
         self.assertTrue(len(data["map_stats"]) >= 1)
+        self.assertIsInstance(data["recent_results"], list)
+        self.assertTrue(len(data["recent_results"]) >= 2)
+        self.assertEqual(data["recent_results"][0]["match_id"], "2371234")
 
     def test_parse_team_page_minimal_html(self) -> None:
         data = parse_team_page("<html><body></body></html>", "999")
@@ -123,6 +130,11 @@ class ParsePlayerPageTests(unittest.TestCase):
         self.assertEqual(data["rating"], 1.25)
         self.assertEqual(data["adr"], 82.4)
         self.assertEqual(data["maps_played"], 1500)
+        self.assertIsInstance(data["per_map_stats"], list)
+        self.assertTrue(len(data["per_map_stats"]) >= 2)
+        self.assertIsInstance(data["recent_form"], list)
+        self.assertTrue(len(data["recent_form"]) >= 1)
+        self.assertEqual(data["recent_form"][0]["map_stats_id"], "98765")
 
     def test_parse_player_page_minimal_html(self) -> None:
         data = parse_player_page("<html><body></body></html>", "999")

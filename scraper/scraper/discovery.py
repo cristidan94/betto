@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 from scraper.config import ScraperConfig
 from scraper.fetcher import HltvFetcher
-from scraper.parser import parse_results_page
+from scraper.parser import parse_results_page, parse_upcoming_page
 from scraper.tracking_db import TrackingDB
 
 
@@ -52,6 +52,35 @@ def discover_page(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, p
         "discovered": discovered,
         "oldest_scheduled_at": _oldest_scheduled_at(entries),
     }
+
+
+def discover_upcoming(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig) -> dict[str, int]:
+    result = fetcher.fetch("https://www.hltv.org/matches")
+    if not result.ok:
+        return {"ok": False, "entries": 0, "allowed": 0, "discovered": 0, "live": 0}
+    entries = parse_upcoming_page(result.html)
+    allowed = 0
+    discovered = 0
+    live = 0
+    for entry in entries:
+        event_name = entry.get("event_name") or ""
+        if not _allowed(event_name, config.event_allow_list):
+            continue
+        allowed += 1
+        if entry.get("is_live"):
+            live += 1
+        before = db.get_match(entry["match_id"])
+        db.upsert_match(
+            entry["match_id"],
+            entry["match_url"],
+            event_name=event_name,
+            event_stars=entry.get("event_stars"),
+            scheduled_at=entry.get("scheduled_at"),
+            priority_tier=_priority(event_name, entry.get("event_stars"), config.event_tier_overrides),
+        )
+        if before is None:
+            discovered += 1
+    return {"ok": True, "entries": len(entries), "allowed": allowed, "discovered": discovered, "live": live}
 
 
 def _allowed(event_name: str, allow_list: list[str]) -> bool:
