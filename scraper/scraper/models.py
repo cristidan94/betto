@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 
+SCHEMA_VERSION = "hltv-fixture-v1"
+
+
 @dataclass(frozen=True)
 class ScrapedTeam:
     hltv_id: str
@@ -25,6 +28,7 @@ class ScrapedEvent:
     hltv_id: str
     name: str
     stars: int | None = None
+    priority_tier: int | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ class ScrapedMatch:
 
 def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
     return {
+        "schema_version": SCHEMA_VERSION,
         "hltv_id": match.hltv_id,
         "scheduled_at": match.scheduled_at.isoformat(),
         "best_of": match.best_of,
@@ -93,7 +98,8 @@ def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
         "event": {
             "hltv_id": match.event.hltv_id,
             "name": match.event.name,
-            "tier": str(match.event.stars) if match.event.stars else None,
+            "tier": match.event.priority_tier if match.event.priority_tier is not None else _tier_from_stars(match.event.stars),
+            "hltv_stars": match.event.stars,
         },
         "players": [
             {"hltv_id": p.hltv_id, "nickname": p.nickname, "team_hltv_id": p.team_hltv_id}
@@ -150,3 +156,9 @@ def write_fixture_json(match: ScrapedMatch, output_dir: Path) -> Path:
     path = output_dir / f"{match.hltv_id}.json"
     path.write_text(json.dumps(match_to_fixture_json(match), indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+def _tier_from_stars(stars: int | None) -> int | None:
+    if stars is None:
+        return None
+    return max(1, 6 - stars)

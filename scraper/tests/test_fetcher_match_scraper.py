@@ -36,7 +36,7 @@ STATS_HTML = """
 
 MAP_STATS_HTML = """
 <table>
-  <tr><td><a href="/player/7998/s1mple">s1mple</a></td><td>25</td><td>18</td></tr>
+  <tr><td><a href="/player/7998/s1mple">s1mple</a></td><td>25 - 18</td><td>5</td><td>88.5</td><td>76.2%</td><td>1.32</td></tr>
 </table>
 """
 
@@ -82,6 +82,38 @@ class FallbackFetcher(HltvFetcher):
 class NoSleepLimiter(RateLimiter):
     def sleep(self) -> None:
         return None
+
+
+class ClassifyFetchErrorTests(unittest.TestCase):
+    def test_timeout_classified(self) -> None:
+        from scraper.match_scraper import _classify_fetch_error
+        result = FetchResult(0, "connection timeout", "curl_cffi", 0, 0)
+        self.assertEqual(_classify_fetch_error(result), "timeout")
+
+    def test_blocked_classified(self) -> None:
+        from scraper.match_scraper import _classify_fetch_error
+        result = FetchResult(403, "Access denied", "curl_cffi", 0, 0)
+        self.assertEqual(_classify_fetch_error(result), "blocked")
+
+    def test_not_found_classified(self) -> None:
+        from scraper.match_scraper import _classify_fetch_error
+        result = FetchResult(404, "Not found", "curl_cffi", 0, 0)
+        self.assertEqual(_classify_fetch_error(result), "not_found")
+
+    def test_rate_limited_classified(self) -> None:
+        from scraper.match_scraper import _classify_fetch_error
+        result = FetchResult(429, "Too many requests", "curl_cffi", 0, 0)
+        self.assertEqual(_classify_fetch_error(result), "rate_limited")
+
+    def test_server_error_classified(self) -> None:
+        from scraper.match_scraper import _classify_fetch_error
+        result = FetchResult(502, "Bad gateway", "curl_cffi", 0, 0)
+        self.assertEqual(_classify_fetch_error(result), "server_error")
+
+    def test_daily_cap_classified(self) -> None:
+        from scraper.match_scraper import _classify_fetch_error
+        result = FetchResult(0, "daily cap reached", "rate_limiter", 0, 0)
+        self.assertEqual(_classify_fetch_error(result), "daily_cap")
 
 
 class FetcherMatchScraperTests(unittest.TestCase):
@@ -152,8 +184,37 @@ class FetcherMatchScraperTests(unittest.TestCase):
         self.assertEqual(row["maps_fetched"], 1)
         self.assertEqual(row["parsed"], 1)
         self.assertEqual(row["final"], 1)
+        self.assertEqual(payload["event"]["tier"], 1)
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["kills"], 25)
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["deaths"], 18)
+        self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["assists"], 5)
+        self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["adr"], 88.5)
+        self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["kast_pct"], 76.2)
+        self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["rating"], 1.32)
+
+    def test_stats_error_recorded_when_stats_fetch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = TrackingDB(root / "queue.db")
+            db.upsert_match("2371236", "/matches/2371236/navi-vs-faze")
+            fetcher = ScriptedFetcher(
+                db,
+                root / "raw",
+                {
+                    "/matches/2371236": FetchResult(200, MATCH_HTML, "fake", 1, len(MATCH_HTML)),
+                    "/stats/matches/112345": FetchResult(403, "blocked", "fake", 1, 7),
+                    "mapstatsid/98765": FetchResult(403, "blocked", "fake", 1, 7),
+                },
+            )
+            config = ScraperConfig(raw_dir=root / "raw", output_dir=root / "out", db_path=root / "queue.db")
+
+            scrape_one_match("2371236", "/matches/2371236/navi-vs-faze", fetcher, db, NoSleepLimiter(), config)
+            row = db.get_match("2371236")
+            db.close()
+
+        assert row is not None
+        self.assertIsNotNone(row["stats_error"])
+        self.assertIn("blocked", row["stats_error"])
 
     def test_scheduled_match_is_written_but_deferred_for_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

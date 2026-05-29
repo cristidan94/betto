@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from scraper.cli import main
+from scraper.backfill import run_backfill
 from scraper.config import ScraperConfig
-from scraper.discovery import discover_matches
+from scraper.discovery import _priority, discover_matches
 from scraper.fetcher import FetchResult
 from scraper.match_scraper import _assemble_match
 from scraper.pipeline import run_pipeline
@@ -36,6 +41,26 @@ class DiscoveryPipelineTests(unittest.TestCase):
 
         self.assertEqual(discovered, 1)
         self.assertIsNotNone(row)
+
+    def test_priority_uses_event_tier_overrides_before_stars(self) -> None:
+        self.assertEqual(_priority("CCT Season 3", 5, {"CCT": 2}), 2)
+        self.assertEqual(_priority("IEM Cologne", 4, {"IEM Cologne": 1}), 1)
+        self.assertEqual(_priority("Unknown Cup", 5, {"CCT": 2}), 1)
+
+    def test_discovery_skips_matches_before_stop_date(self) -> None:
+        html = """
+        <div class="event-name">IEM Cologne</div>
+        <a href="/matches/2371234/navi-vs-faze"><span data-unix="1695686400000"></span>NAVI vs FaZe</a>
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db = TrackingDB(Path(tmp) / "queue.db")
+            config = ScraperConfig(db_path=Path(tmp) / "queue.db", event_allow_list=["IEM"], backfill_stop_date="2023-09-27")
+            discovered = discover_matches(FakeFetcher(html), db, config, max_pages=1)  # type: ignore[arg-type]
+            row = db.get_match("2371234")
+            db.close()
+
+        self.assertEqual(discovered, 0)
+        self.assertIsNone(row)
 
     def test_assemble_match_builds_scraped_model(self) -> None:
         match = _assemble_match(
@@ -110,6 +135,118 @@ class DiscoveryPipelineTests(unittest.TestCase):
         self.assertEqual(result["discovered"], 1)
         self.assertEqual(result["fetched"], 1)
         self.assertEqual(result["queue"]["parsed"], 1)
+
+    def test_backfill_cli_passes_page_and_match_limits(self) -> None:
+        with patch("scraper.cli.run_pipeline", return_value={"discovered": 0, "fetched": 0}) as run:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = main(["backfill", "--pages", "25", "--matches", "40"])
+
+        payload = json.loads(buffer.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload, {"discovered": 0, "fetched": 0})
+        self.assertEqual(run.call_args.kwargs["max_discovery_pages"], 25)
+        self.assertEqual(run.call_args.kwargs["max_matches"], 40)
+
+    def test_backfill_auto_persists_cursor_and_discovers_without_network(self) -> None:
+        def fake_page(fetcher, db: TrackingDB, config: ScraperConfig, page: int) -> dict:
+            if page >= 2:
+                return {"ok": True, "page": page, "entries": 0, "allowed": 0, "discovered": 0}
+            db.upsert_match(str(page), f"/matches/{page}/a-vs-b", event_name="IEM Cologne", priority_tier=1)
+            return {"ok": True, "page": page, "entries": 1, "allowed": 1, "discovered": 1}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ScraperConfig(
+                raw_dir=Path(tmp) / "raw",
+                output_dir=Path(tmp) / "out",
+                db_path=Path(tmp) / "queue.db",
+                min_delay=0,
+                max_delay=0,
+                quiet_hours_start=0,
+                quiet_hours_end=0,
+            )
+            with patch("scraper.backfill.discover_page", side_effect=fake_page), patch(
+                "scraper.backfill.scrape_one_match", return_value=True
+            ):
+                result = run_backfill(config, pages_per_run=3, max_matches=0, empty_pages_to_stop=5)
+                db = TrackingDB(config.db_path)
+                next_page = db.get_int_state("backfill_next_page")
+                done = db.get_state("backfill_done", "0")
+                db.close()
+
+        self.assertEqual(result["discovered"], 2)
+        self.assertEqual(result["pages_scanned"], 3)
+        self.assertEqual(next_page, 3)
+        self.assertEqual(done, "0")
+
+    def test_backfill_auto_marks_done_after_empty_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ScraperConfig(
+                raw_dir=Path(tmp) / "raw",
+                output_dir=Path(tmp) / "out",
+                db_path=Path(tmp) / "queue.db",
+                min_delay=0,
+                max_delay=0,
+                quiet_hours_start=0,
+                quiet_hours_end=0,
+            )
+            with patch(
+                "scraper.backfill.discover_page",
+                return_value={"ok": True, "page": 0, "entries": 0, "allowed": 0, "discovered": 0},
+            ):
+                result = run_backfill(config, pages_per_run=2, max_matches=0, empty_pages_to_stop=2)
+                db = TrackingDB(config.db_path)
+                done = db.get_state("backfill_done", "0")
+                db.close()
+
+        self.assertTrue(result["done"])
+        self.assertEqual(done, "1")
+
+    def test_backfill_auto_respects_max_page_and_sends_single_done_alert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ScraperConfig(
+                raw_dir=Path(tmp) / "raw",
+                output_dir=Path(tmp) / "out",
+                db_path=Path(tmp) / "queue.db",
+                min_delay=0,
+                max_delay=0,
+                quiet_hours_start=0,
+                quiet_hours_end=0,
+                backfill_max_page=0,
+                alert_webhook_url="https://example.invalid/webhook",
+            )
+            with patch(
+                "scraper.backfill.discover_page",
+                return_value={"ok": True, "page": 0, "entries": 0, "allowed": 0, "discovered": 0},
+            ), patch("scraper.backfill.send_webhook", return_value={"sent": True, "status": 200}) as alert:
+                first = run_backfill(config, pages_per_run=2, max_matches=0, empty_pages_to_stop=99)
+                second = run_backfill(config, pages_per_run=2, max_matches=0, empty_pages_to_stop=99)
+
+        self.assertTrue(first["done"])
+        self.assertTrue(second["done"])
+        self.assertEqual(alert.call_count, 1)
+
+    def test_backfill_auto_stops_at_stop_date(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ScraperConfig(
+                raw_dir=Path(tmp) / "raw",
+                output_dir=Path(tmp) / "out",
+                db_path=Path(tmp) / "queue.db",
+                min_delay=0,
+                max_delay=0,
+                quiet_hours_start=0,
+                quiet_hours_end=0,
+                backfill_stop_date="2023-09-27",
+            )
+            with patch(
+                "scraper.backfill.discover_page",
+                return_value={"ok": True, "page": 0, "entries": 1, "allowed": 0, "discovered": 0, "oldest_scheduled_at": "2023-09-27T00:00:00+00:00"},
+            ):
+                result = run_backfill(config, pages_per_run=3, max_matches=0, empty_pages_to_stop=99)
+
+        self.assertTrue(result["done"])
+        self.assertEqual(result["pages_scanned"], 1)
 
 
 if __name__ == "__main__":

@@ -511,3 +511,409 @@ def _stars_near(link) -> int | None:
 def _map_stats_id_near(text: str) -> str | None:
     match = re.search(r"mapstatsid/(\d+)|statsid[=/](\d+)", text)
     return match.group(1) or match.group(2) if match else None
+
+
+# ---------------------------------------------------------------------------
+# Entity page parsers (event, team, player)
+# ---------------------------------------------------------------------------
+
+
+def parse_event_page(html: str, event_id: str) -> dict[str, Any]:
+    if BeautifulSoup is None:
+        return _parse_event_page_fallback(html, event_id)
+    soup = _soup(html)
+    text = soup.get_text(" ", strip=True)
+    return {
+        "hltv_id": event_id,
+        "name": _event_page_name(soup),
+        "location": _event_page_location(soup, text),
+        "country": _event_page_country(soup, text),
+        "lan": _event_page_lan(soup, text),
+        "prize_pool": _event_page_prize(soup, text),
+        "team_count": _event_page_team_count(soup, text),
+        "format": _event_page_format(soup, text),
+        "dates": _event_page_dates(soup, text),
+        "teams": _event_page_teams(soup),
+    }
+
+
+def parse_team_page(html: str, team_id: str) -> dict[str, Any]:
+    if BeautifulSoup is None:
+        return _parse_team_page_fallback(html, team_id)
+    soup = _soup(html)
+    text = soup.get_text(" ", strip=True)
+    return {
+        "hltv_id": team_id,
+        "name": _team_page_name(soup),
+        "country": _team_page_country(soup, text),
+        "world_ranking": _team_page_ranking(soup, text),
+        "coach": _team_page_coach(soup),
+        "roster": _team_page_roster(soup),
+        "map_stats": _team_page_map_stats(soup, text),
+    }
+
+
+def parse_player_page(html: str, player_id: str) -> dict[str, Any]:
+    if BeautifulSoup is None:
+        return _parse_player_page_fallback(html, player_id)
+    soup = _soup(html)
+    text = soup.get_text(" ", strip=True)
+    return {
+        "hltv_id": player_id,
+        "nickname": _player_page_nickname(soup),
+        "real_name": _player_page_real_name(soup, text),
+        "country": _player_page_country(soup, text),
+        "age": _player_page_age(soup, text),
+        "team": _player_page_team(soup),
+        "rating": _player_page_stat(text, r"(?:Rating|rating)\s*[\d.]+\s*([\d.]+)"),
+        "dpr": _player_page_stat(text, r"DPR\s*([\d.]+)"),
+        "kast": _player_page_stat(text, r"KAST\s*([\d.]+)"),
+        "impact": _player_page_stat(text, r"Impact\s*([\d.]+)"),
+        "adr": _player_page_stat(text, r"ADR\s*([\d.]+)"),
+        "kpr": _player_page_stat(text, r"KPR\s*([\d.]+)"),
+        "headshot_pct": _player_page_stat(text, r"(?:HS|Headshot)\s*%?\s*([\d.]+)"),
+        "maps_played": _player_page_int_stat(text, r"Maps\s*played\s*(\d+)"),
+    }
+
+
+# -- Event page helpers --
+
+
+def _event_page_name(soup) -> str:
+    el = soup.select_one(".event-hub-title, .eventname, h1.event-name")
+    if el:
+        return el.get_text(" ", strip=True)
+    title = soup.select_one("title")
+    if title:
+        return title.get_text(" ", strip=True).split("|")[0].strip()
+    return "Unknown Event"
+
+
+def _event_page_location(soup, text: str) -> str | None:
+    el = soup.select_one(".flag-align .text-ellipsis, .event-meta-value, .location")
+    if el:
+        return el.get_text(" ", strip=True)
+    match = re.search(r"(?:Location|Venue)\s*[:\-]\s*([^\n|]+)", text, re.I)
+    return match.group(1).strip() if match else None
+
+
+def _event_page_country(soup, text: str) -> str | None:
+    flag = soup.select_one(".event-world-ranking .flag, .flag-align .flag")
+    if flag:
+        title = flag.get("alt") or flag.get("title")
+        if title:
+            return str(title).strip()
+    match = re.search(r"(?:Country|Location)\s*[:\-]\s*([A-Za-z ]+)", text, re.I)
+    return match.group(1).strip() if match else None
+
+
+def _event_page_lan(soup, text: str) -> bool | None:
+    if re.search(r"\bLAN\b", text):
+        return True
+    if re.search(r"\bOnline\b", text, re.I):
+        return False
+    return None
+
+
+def _event_page_prize(soup, text: str) -> str | None:
+    el = soup.select_one(".prizepool, .prize-pool")
+    if el:
+        return el.get_text(" ", strip=True)
+    match = re.search(r"(?:Prize\s*pool|Prizepool)\s*[:\-]?\s*(\$[\d,]+(?:\.\d+)?)", text, re.I)
+    return match.group(1) if match else None
+
+
+def _event_page_team_count(soup, text: str) -> int | None:
+    el = soup.select_one(".teamsNumber")
+    if el:
+        try:
+            return int(re.sub(r"\D", "", el.get_text()))
+        except ValueError:
+            pass
+    match = re.search(r"(\d+)\s*teams", text, re.I)
+    return int(match.group(1)) if match else None
+
+
+def _event_page_format(soup, text: str) -> str | None:
+    el = soup.select_one(".format-value, .event-meta-value")
+    if el:
+        return el.get_text(" ", strip=True)[:200]
+    match = re.search(r"Format\s*[:\-]\s*([^\n|]+)", text, re.I)
+    return match.group(1).strip()[:200] if match else None
+
+
+def _event_page_dates(soup, text: str) -> dict[str, str | None]:
+    dates: dict[str, str | None] = {"start": None, "end": None}
+    for node in soup.select("[data-unix]"):
+        val = node.get("data-unix")
+        if val:
+            try:
+                ts = float(val)
+                if ts > 10_000_000_000:
+                    ts /= 1000
+                iso = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+                if dates["start"] is None or iso < dates["start"]:
+                    dates["start"] = iso
+                if dates["end"] is None or iso > dates["end"]:
+                    dates["end"] = iso
+            except (ValueError, OverflowError):
+                pass
+    return dates
+
+
+def _event_page_teams(soup) -> list[dict[str, str]]:
+    teams: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for link in soup.select("a[href*='/team/']"):
+        href = link.get("href") or ""
+        match = re.search(r"/team/(\d+)/([^?#]+)", href)
+        name = link.get_text(" ", strip=True)
+        if match and name and match.group(1) not in seen:
+            seen.add(match.group(1))
+            teams.append({"hltv_id": match.group(1), "name": name})
+    return teams
+
+
+def _parse_event_page_fallback(html: str, event_id: str) -> dict[str, Any]:
+    text = _strip_tags(html)
+    teams = []
+    seen: set[str] = set()
+    for href, name, _ in _anchors(html):
+        m = re.search(r"/team/(\d+)/([^?#]+)", href)
+        if m and name and m.group(1) not in seen:
+            seen.add(m.group(1))
+            teams.append({"hltv_id": m.group(1), "name": name})
+    return {
+        "hltv_id": event_id,
+        "name": _event_name_from_context(text) or "Unknown Event",
+        "location": None,
+        "country": None,
+        "lan": True if re.search(r"\bLAN\b", text) else None,
+        "prize_pool": None,
+        "team_count": None,
+        "format": None,
+        "dates": {"start": None, "end": None},
+        "teams": teams,
+    }
+
+
+# -- Team page helpers --
+
+
+def _team_page_name(soup) -> str:
+    el = soup.select_one(".profile-team-name, h1.team-name, .team-name")
+    if el:
+        return el.get_text(" ", strip=True)
+    title = soup.select_one("title")
+    if title:
+        return title.get_text(" ", strip=True).split("|")[0].strip()
+    return "Unknown Team"
+
+
+def _team_page_country(soup, text: str) -> str | None:
+    flag = soup.select_one(".team-country .flag, .profile-team-info .flag")
+    if flag:
+        title = flag.get("alt") or flag.get("title")
+        if title:
+            return str(title).strip()
+    return None
+
+
+def _team_page_ranking(soup, text: str) -> int | None:
+    el = soup.select_one(".profile-team-stat .right, .ranking .right")
+    if el:
+        match = re.search(r"#?(\d+)", el.get_text())
+        if match:
+            return int(match.group(1))
+    match = re.search(r"(?:World\s*ranking|Ranking)\s*#?(\d+)", text, re.I)
+    return int(match.group(1)) if match else None
+
+
+def _team_page_coach(soup) -> dict[str, str] | None:
+    el = soup.select_one(".profile-team-coach a[href*='/player/']")
+    if not el:
+        return None
+    href = el.get("href") or ""
+    match = re.search(r"/player/(\d+)", href)
+    return {"hltv_id": match.group(1) if match else "", "nickname": el.get_text(" ", strip=True)}
+
+
+def _team_page_roster(soup) -> list[dict[str, str]]:
+    players: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for container in soup.select(".players-table, .bodyshot-team, .team-roster"):
+        for link in container.select("a[href*='/player/']"):
+            href = link.get("href") or ""
+            match = re.search(r"/player/(\d+)/([^?#]+)", href)
+            if match and match.group(1) not in seen:
+                seen.add(match.group(1))
+                players.append({
+                    "hltv_id": match.group(1),
+                    "nickname": link.get_text(" ", strip=True) or match.group(2),
+                })
+    if not players:
+        for link in soup.select("a[href*='/player/']"):
+            href = link.get("href") or ""
+            match = re.search(r"/player/(\d+)/([^?#]+)", href)
+            name = link.get_text(" ", strip=True)
+            if match and name and match.group(1) not in seen:
+                seen.add(match.group(1))
+                players.append({"hltv_id": match.group(1), "nickname": name})
+            if len(players) >= 7:
+                break
+    return players
+
+
+def _team_page_map_stats(soup, text: str) -> list[dict[str, Any]]:
+    stats: list[dict[str, Any]] = []
+    map_names = {"Mirage", "Inferno", "Nuke", "Ancient", "Anubis", "Dust2", "Train", "Vertigo", "Overpass", "Cache"}
+    for map_name in map_names:
+        pattern = re.compile(rf"{map_name}\s+(\d+)\s+/\s+(\d+)", re.I)
+        match = pattern.search(text)
+        if match:
+            wins = int(match.group(1))
+            total = int(match.group(2))
+            stats.append({
+                "map_name": map_name,
+                "wins": wins,
+                "losses": total - wins,
+                "total": total,
+                "win_rate": round(wins / total, 3) if total > 0 else 0.0,
+            })
+    return stats
+
+
+def _parse_team_page_fallback(html: str, team_id: str) -> dict[str, Any]:
+    text = _strip_tags(html)
+    players: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for href, name, _ in _anchors(html):
+        m = re.search(r"/player/(\d+)/([^?#]+)", href)
+        if m and name and m.group(1) not in seen:
+            seen.add(m.group(1))
+            players.append({"hltv_id": m.group(1), "nickname": name})
+    rank_match = re.search(r"(?:World\s*ranking|Ranking)\s*#?(\d+)", text, re.I)
+    return {
+        "hltv_id": team_id,
+        "name": _fallback_team_name(html),
+        "country": None,
+        "world_ranking": int(rank_match.group(1)) if rank_match else None,
+        "coach": None,
+        "roster": players[:7],
+        "map_stats": [],
+    }
+
+
+def _fallback_team_name(html: str) -> str:
+    match = re.search(r"<title[^>]*>([^<]+)", html, re.I)
+    if match:
+        return match.group(1).split("|")[0].strip()
+    return "Unknown Team"
+
+
+# -- Player page helpers --
+
+
+def _player_page_nickname(soup) -> str:
+    el = soup.select_one(".playerNickname, h1.player-nick, .player-nick")
+    if el:
+        return el.get_text(" ", strip=True)
+    title = soup.select_one("title")
+    if title:
+        return title.get_text(" ", strip=True).split("|")[0].strip()
+    return "Unknown"
+
+
+def _player_page_real_name(soup, text: str) -> str | None:
+    el = soup.select_one(".playerRealname, .player-realname")
+    if el:
+        name = el.get_text(" ", strip=True)
+        return name if name else None
+    return None
+
+
+def _player_page_country(soup, text: str) -> str | None:
+    flag = soup.select_one(".playerRealname .flag, .player-realname .flag")
+    if flag:
+        title = flag.get("alt") or flag.get("title")
+        if title:
+            return str(title).strip()
+    return None
+
+
+def _player_page_age(soup, text: str) -> int | None:
+    el = soup.select_one(".playerAge .listRight")
+    if el:
+        match = re.search(r"(\d+)", el.get_text())
+        if match:
+            return int(match.group(1))
+    match = re.search(r"Age\s*[:\-]?\s*(\d+)", text, re.I)
+    return int(match.group(1)) if match else None
+
+
+def _player_page_team(soup) -> dict[str, str] | None:
+    link = soup.select_one(".playerTeam a[href*='/team/'], a.team-name[href*='/team/']")
+    if not link:
+        for candidate in soup.select("a[href*='/team/']"):
+            href = candidate.get("href") or ""
+            if "/team/" in href and "/teams/" not in href:
+                link = candidate
+                break
+    if not link:
+        return None
+    href = link.get("href") or ""
+    match = re.search(r"/team/(\d+)/([^?#]+)", href)
+    return {"hltv_id": match.group(1) if match else "", "name": link.get_text(" ", strip=True)}
+
+
+def _player_page_stat(text: str, pattern: str) -> float | None:
+    match = re.search(pattern, text, re.I)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _player_page_int_stat(text: str, pattern: str) -> int | None:
+    match = re.search(pattern, text, re.I)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_player_page_fallback(html: str, player_id: str) -> dict[str, Any]:
+    text = _strip_tags(html)
+    team = None
+    for href, name, _ in _anchors(html):
+        m = re.search(r"/team/(\d+)/([^?#]+)", href)
+        if m and name:
+            team = {"hltv_id": m.group(1), "name": name}
+            break
+    return {
+        "hltv_id": player_id,
+        "nickname": _fallback_player_nickname(html),
+        "real_name": None,
+        "country": None,
+        "age": None,
+        "team": team,
+        "rating": _player_page_stat(text, r"(?:Rating|rating)\s*[\d.]+\s*([\d.]+)"),
+        "dpr": None,
+        "kast": None,
+        "impact": None,
+        "adr": _player_page_stat(text, r"ADR\s*([\d.]+)"),
+        "kpr": None,
+        "headshot_pct": None,
+        "maps_played": None,
+    }
+
+
+def _fallback_player_nickname(html: str) -> str:
+    match = re.search(r"<title[^>]*>([^<]+)", html, re.I)
+    if match:
+        return match.group(1).split("|")[0].strip()
+    return "Unknown"

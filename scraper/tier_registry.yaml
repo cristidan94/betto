@@ -1,0 +1,128 @@
+# HLTV Event Tier Registry
+#
+# tier: 1 = elite (majors, IEM flagships, BLAST world finals)
+#        2 = premier (EPL, regional championships, CCT finals)
+#        3 = mid-tier (smaller LANs, qualifiers for tier 1)
+#        4 = low-tier (online cups, small regional events)
+#
+# tags are informational and not used for filtering yet.
+# pattern matching is case-insensitive substring match against event name.
+
+events:
+  # Majors
+  - pattern: "PGL Major"
+    tier: 1
+    tags: ["lan", "major"]
+  - pattern: "BLAST.tv Major"
+    tier: 1
+    tags: ["lan", "major"]
+  - pattern: "Perfect World Major"
+    tier: 1
+    tags: ["lan", "major"]
+  - pattern: "FACEIT Major"
+    tier: 1
+    tags: ["lan", "major"]
+  - pattern: "StarLadder Major"
+    tier: 1
+    tags: ["lan", "major"]
+  - pattern: "PGL CS2 Major"
+    tier: 1
+    tags: ["lan", "major"]
+
+  # IEM flagships
+  - pattern: "IEM Katowice"
+    tier: 1
+    tags: ["lan", "elite", "esl"]
+  - pattern: "IEM Cologne"
+    tier: 1
+    tags: ["lan", "elite", "esl"]
+
+  # BLAST elite
+  - pattern: "BLAST Premier World Final"
+    tier: 1
+    tags: ["lan", "elite", "blast"]
+
+  # Leagues
+  - pattern: "ESL Pro League"
+    tier: 1
+    tags: ["league", "elite", "esl"]
+
+  # Regional championships
+  - pattern: "CS Asia Championships"
+    tier: 1
+    tags: ["lan", "regional"]
+
+  # IEM regional
+  - pattern: "IEM Chengdu"
+    tier: 2
+    tags: ["lan", "esl"]
+  - pattern: "IEM Dallas"
+    tier: 2
+    tags: ["lan", "esl"]
+  - pattern: "IEM Sydney"
+    tier: 2
+    tags: ["lan", "esl"]
+  - pattern: "IEM Rio"
+    tier: 2
+    tags: ["lan", "esl"]
+  - pattern: "IEM Melbourne"
+    tier: 2
+    tags: ["lan", "esl"]
+  - pattern: "Intel Extreme Masters"
+    tier: 2
+    tags: ["lan", "esl"]
+
+  # BLAST seasons
+  - pattern: "BLAST Premier Spring"
+    tier: 2
+    tags: ["league", "blast"]
+  - pattern: "BLAST Premier Fall"
+    tier: 2
+    tags: ["league", "blast"]
+
+  # Premier online
+  - pattern: "CCT Global Finals"
+    tier: 2
+    tags: ["lan", "regional"]
+  - pattern: "CCT"
+    tier: 2
+    tags: ["online", "regional"]
+  - pattern: "YaLLa Compass"
+    tier: 2
+    tags: ["online", "regional"]
+  - pattern: "Roobet Cup"
+    tier: 2
+    tags: ["online", "regional"]
+  - pattern: "Thunderpick World Championship"
+    tier: 2
+    tags: ["lan", "regional"]
+  - pattern: "Betway Championship"
+    tier: 2
+    tags: ["online", "regional"]
+
+allow_list:
+  - "PGL Major"
+  - "BLAST.tv Major"
+  - "Perfect World Major"
+  - "FACEIT Major"
+  - "StarLadder Major"
+  - "IEM Katowice"
+  - "IEM Cologne"
+  - "IEM Chengdu"
+  - "IEM Dallas"
+  - "IEM Sydney"
+  - "IEM Rio"
+  - "IEM Melbourne"
+  - "Intel Extreme Masters"
+  - "ESL Pro League"
+  - "BLAST Premier Spring"
+  - "BLAST Premier Fall"
+  - "BLAST Premier World Final"
+  - "Thunderpick World Championship"
+  - "CS Asia Championships"
+  - "YaLLa Compass"
+  - "Roobet Cup"
+  - "Betway Championship"
+  - "CCT Season"
+  - "CCT Global Finals"
+  - "PGL CS2 Major"

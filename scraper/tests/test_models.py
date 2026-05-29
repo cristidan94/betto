@@ -66,7 +66,10 @@ class ModelTests(unittest.TestCase):
         payload = match_to_fixture_json(match)
 
         self.assertEqual(payload["hltv_id"], "100")
+        self.assertEqual(payload["schema_version"], "hltv-fixture-v1")
         self.assertEqual(payload["source"]["name"], "hltv-scraper")
+        self.assertEqual(payload["event"]["tier"], 1)
+        self.assertEqual(payload["event"]["hltv_stars"], 5)
         self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["kills"], 25)
         self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["ct_kills"], 14)
 

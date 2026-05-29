@@ -103,6 +103,98 @@ python -m scraper.cli run
 python -m scraper.cli backup
 ```
 
+## Historical Backfill
+
+Historical backfill runs automatically on the VPS through `hltv-backfill.timer`. It stores its cursor in `data/hltv_scraper.db`, so it can stop at the daily cap and continue later from the same HLTV results page.
+
+Check it with:
+
+```bash
+systemctl list-timers hltv-backfill.timer
+journalctl -u hltv-backfill.service -n 100 --no-pager
+.venv/bin/python -m scraper.cli status --verbose
+.venv/bin/python -m scraper.cli quality-report
+.venv/bin/python -m scraper.cli validate-fixtures
+.venv/bin/python -m scraper.cli health
+.venv/bin/python -m scraper.cli failed --limit 20
+.venv/bin/python -m scraper.cli stats-gaps
+.venv/bin/python -m scraper.cli manifest --out data/hltv_scraped/manifest.json --include-files
+.venv/bin/python -m scraper.cli report --out data/hltv_scraped/report.html
+.venv/bin/python -m scraper.cli alert --title "HLTV scraper status"
+.venv/bin/python -m scraper.cli reparse-raw
+```
+
+To start a backfill run immediately:
+
+```bash
+sudo systemctl start hltv-backfill.service
+```
+
+Each page is one HLTV results request with 100 result entries before event filtering. Manual one-off backfill is also available:
+
+```bash
+cd /opt/betto/scraper
+.venv/bin/python -m scraper.cli backfill --pages 50 --matches 100
+```
+
+Use a larger page count to go further back:
+
+```bash
+.venv/bin/python -m scraper.cli backfill --pages 200 --matches 100
+```
+
+The daily cap still applies across discovery and match fetches. With `HLTV_DAILY_CAP=100`, a large backfill may take multiple days/runs. Increase it cautiously only after logs look healthy.
+
+`backfill-auto` persists these state keys:
+
+- `backfill_next_page`
+- `backfill_empty_pages`
+- `backfill_done`
+- `backfill_started_at`
+- `backfill_completed_at`
+
+When `backfill_done = 1` and no due queue items remain, the backfill service disables `hltv-backfill.timer`.
+
+Optional `.env` controls:
+
+```env
+HLTV_BACKFILL_MAX_PAGE=
+HLTV_BACKFILL_STOP_DATE=
+HLTV_ALERT_WEBHOOK_URL=
+HLTV_EVENT_TIER_OVERRIDES=PGL Major=1,BLAST.tv Major=1,IEM Katowice=1,IEM Cologne=1,ESL Pro League=1,BLAST Premier World Final=1,CS Asia Championships=1,CCT=2,YaLLa Compass=2,Roobet Cup=2
+```
+
+`HLTV_BACKFILL_MAX_PAGE` is a hard stop by HLTV results page number, where each page is an offset of 100 results. `HLTV_ALERT_WEBHOOK_URL` receives one JSON completion alert when auto-backfill finishes.
+`HLTV_BACKFILL_STOP_DATE` is a date boundary for historical backfill, such as `2023-09-27` for CS2-era coverage.
+`HLTV_EVENT_TIER_OVERRIDES` pins event-name patterns to explicit priority tiers before the scraper falls back to HLTV star priority.
+
+To requeue failed rows without editing SQLite:
+
+```bash
+cd /opt/betto/scraper
+.venv/bin/python -m scraper.cli failed --limit 50
+.venv/bin/python -m scraper.cli retry-failed --limit 100
+sudo systemctl start hltv-backfill.service
+```
+
+To requeue finished matches that are missing player map stats:
+
+```bash
+cd /opt/betto/scraper
+.venv/bin/python -m scraper.cli stats-gaps --limit 50
+.venv/bin/python -m scraper.cli retry-stats-only --limit 50
+sudo systemctl start hltv-backfill.service
+```
+
+To restart historical discovery from a specific page:
+
+```bash
+cd /opt/betto/scraper
+.venv/bin/python -m scraper.cli reset-backfill --start-page 0
+sudo systemctl enable --now hltv-backfill.timer
+sudo systemctl start hltv-backfill.service
+```
+
 ## Queue Lifecycle
 
 The scraper keeps its queue in `data/hltv_scraper.db`.
@@ -137,6 +229,17 @@ cd /opt/betto
 python -m core.cli.main convert-hltv-scraped \
   --raw-dir scraper/data/hltv_scraped \
   --out-dir data/hltv_fixtures
+```
+
+## Reparse Saved Raw HTML
+
+Parser improvements do not require spending proxy requests again. Regenerate fixture JSON from already-saved raw HTML with:
+
+```bash
+cd /opt/betto/scraper
+.venv/bin/python -m scraper.cli reparse-raw
+.venv/bin/python -m scraper.cli quality-report
+.venv/bin/python -m scraper.cli manifest --out data/hltv_scraped/manifest.json --include-files
 ```
 
 ## Backup Files

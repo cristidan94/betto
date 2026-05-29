@@ -9,6 +9,8 @@ Usage:
 Environment:
   HLTV_PROXY_URL       Optional. If set and .env is missing, the script writes it to .env.
   HLTV_DAILY_CAP       Optional. Defaults to 100 for the pilot deployment.
+  HLTV_BACKFILL_MAX_PAGE Optional. Hard stop page for historical backfill.
+  HLTV_ALERT_WEBHOOK_URL Optional. Completion webhook for backfill.
 
 Run this from the scraper directory after the repo has been copied or pulled on the VPS:
   cd /opt/betto/scraper
@@ -95,6 +97,10 @@ path = Path(".env")
 text = path.read_text(encoding="utf-8")
 text = text.replace("HLTV_PROXY_URL=http://username:password@gate.decodo.com:7000", f"HLTV_PROXY_URL={os.environ['HLTV_PROXY_URL']}")
 text = text.replace("HLTV_DAILY_CAP=100", f"HLTV_DAILY_CAP={os.environ.get('HLTV_DAILY_CAP', '100')}")
+if os.environ.get("HLTV_BACKFILL_MAX_PAGE"):
+    text = text.replace("HLTV_BACKFILL_MAX_PAGE=", f"HLTV_BACKFILL_MAX_PAGE={os.environ['HLTV_BACKFILL_MAX_PAGE']}")
+if os.environ.get("HLTV_ALERT_WEBHOOK_URL"):
+    text = text.replace("HLTV_ALERT_WEBHOOK_URL=", f"HLTV_ALERT_WEBHOOK_URL={os.environ['HLTV_ALERT_WEBHOOK_URL']}")
 path.write_text(text, encoding="utf-8")
 PY
   else
@@ -120,6 +126,8 @@ if [[ "$INSTALL_SYSTEMD" -eq 1 ]]; then
   echo "==> Installing systemd unit and timer"
   service_file="/etc/systemd/system/hltv-scraper.service"
   timer_file="/etc/systemd/system/hltv-scraper.timer"
+  backfill_service_file="/etc/systemd/system/hltv-backfill.service"
+  backfill_timer_file="/etc/systemd/system/hltv-backfill.timer"
   sudo tee "$service_file" >/dev/null <<EOF
 [Unit]
 Description=HLTV scraper run
@@ -148,13 +156,48 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+  sudo tee "$backfill_service_file" >/dev/null <<EOF
+[Unit]
+Description=HLTV historical backfill
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$SCRAPER_DIR
+EnvironmentFile=$SCRAPER_DIR/.env
+ExecStart=$SCRAPER_DIR/.venv/bin/python -m scraper.cli backfill-auto --disable-timer-on-done hltv-backfill.timer
+ExecStartPost=$SCRAPER_DIR/.venv/bin/python -m scraper.cli backup --out-dir $SCRAPER_DIR/backups
+Nice=10
+EOF
+
+  sudo tee "$backfill_timer_file" >/dev/null <<'EOF'
+[Unit]
+Description=Continue HLTV historical backfill hourly until complete
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
   sudo systemctl daemon-reload
   sudo systemctl enable --now hltv-scraper.timer
+  sudo systemctl enable --now hltv-backfill.timer
   sudo systemctl list-timers hltv-scraper.timer --no-pager
+  sudo systemctl list-timers hltv-backfill.timer --no-pager
 fi
 
 echo "==> Done"
 echo "Useful commands:"
 echo "  cd $SCRAPER_DIR && .venv/bin/python -m scraper.cli status"
+echo "  cd $SCRAPER_DIR && .venv/bin/python -m scraper.cli status --verbose"
+echo "  cd $SCRAPER_DIR && .venv/bin/python -m scraper.cli quality-report"
+echo "  cd $SCRAPER_DIR && .venv/bin/python -m scraper.cli health"
 echo "  journalctl -u hltv-scraper.service -n 100 --no-pager"
+echo "  journalctl -u hltv-backfill.service -n 100 --no-pager"
 echo "  sudo systemctl start hltv-scraper.service"
+echo "  sudo systemctl start hltv-backfill.service"

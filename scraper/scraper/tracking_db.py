@@ -105,6 +105,49 @@ class TrackingDB:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def failed_matches(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM scrape_queue
+            WHERE retry_count > 0 OR last_error IS NOT NULL
+            ORDER BY retry_count DESC, updated_at DESC, match_id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def retry_failed(self, limit: int = 100, min_retries: int = 1) -> int:
+        cursor = self._conn.execute(
+            """
+            UPDATE scrape_queue
+            SET next_attempt_at = NULL, final = 0, updated_at = ?
+            WHERE match_id IN (
+              SELECT match_id FROM scrape_queue
+              WHERE retry_count >= ?
+              ORDER BY retry_count DESC, updated_at ASC
+              LIMIT ?
+            )
+            """,
+            (_now(), min_retries, limit),
+        )
+        self._conn.commit()
+        return int(cursor.rowcount or 0)
+
+    def requeue_matches(self, match_ids: list[str], status: str = "manual_retry") -> int:
+        if not match_ids:
+            return 0
+        cursor = self._conn.executemany(
+            """
+            UPDATE scrape_queue
+            SET final = 0, next_attempt_at = NULL, lifecycle_status = ?, updated_at = ?
+            WHERE match_id = ?
+            """,
+            [(status, _now(), match_id) for match_id in match_ids],
+        )
+        self._conn.commit()
+        return int(cursor.rowcount or 0)
+
     def record_error(self, match_id: str, error: str) -> None:
         self._conn.execute(
             """
@@ -113,6 +156,20 @@ class TrackingDB:
             WHERE match_id = ?
             """,
             (error, _now(), match_id),
+        )
+        self._conn.commit()
+
+    def record_stats_error(self, match_id: str, error: str) -> None:
+        self._conn.execute(
+            "UPDATE scrape_queue SET stats_error = ?, updated_at = ? WHERE match_id = ?",
+            (error, _now(), match_id),
+        )
+        self._conn.commit()
+
+    def clear_stats_error(self, match_id: str) -> None:
+        self._conn.execute(
+            "UPDATE scrape_queue SET stats_error = NULL, updated_at = ? WHERE match_id = ?",
+            (_now(), match_id),
         )
         self._conn.commit()
 
@@ -171,11 +228,45 @@ class TrackingDB:
               SUM(CASE WHEN match_fetched = 1 THEN 1 ELSE 0 END) AS match_fetched,
               SUM(CASE WHEN stats_fetched = 1 THEN 1 ELSE 0 END) AS stats_fetched,
               SUM(CASE WHEN parsed = 1 THEN 1 ELSE 0 END) AS parsed,
-              SUM(CASE WHEN final = 1 THEN 1 ELSE 0 END) AS final
+              SUM(CASE WHEN final = 1 THEN 1 ELSE 0 END) AS final,
+              SUM(CASE WHEN final = 0 THEN 1 ELSE 0 END) AS open,
+              SUM(CASE WHEN final = 0 AND (next_attempt_at IS NULL OR next_attempt_at <= ?) THEN 1 ELSE 0 END) AS due,
+              SUM(CASE WHEN retry_count > 0 OR last_error IS NOT NULL THEN 1 ELSE 0 END) AS failed
             FROM scrape_queue
-            """
+            """,
+            (_now(),),
         ).fetchone()
-        return {key: int(row[key] or 0) for key in ("total", "match_fetched", "stats_fetched", "parsed", "final")}
+        return {
+            key: int(row[key] or 0)
+            for key in ("total", "match_fetched", "stats_fetched", "parsed", "final", "open", "due", "failed")
+        }
+
+    def get_state(self, key: str, default: str | None = None) -> str | None:
+        row = self._conn.execute("SELECT value FROM scraper_state WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else default
+
+    def set_state(self, key: str, value: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO scraper_state (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, _now()),
+        )
+        self._conn.commit()
+
+    def get_int_state(self, key: str, default: int = 0) -> int:
+        value = self.get_state(key)
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except ValueError:
+            return default
+
+    def set_int_state(self, key: str, value: int) -> None:
+        self.set_state(key, str(value))
 
     def _mark(self, match_id: str, column: str) -> None:
         if column not in {"match_fetched", "stats_fetched", "parsed"}:
@@ -222,6 +313,11 @@ class TrackingDB:
               content_bytes INTEGER NOT NULL,
               elapsed_ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS scraper_state (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             """
         )
         self._migrate_schema()
@@ -234,6 +330,7 @@ class TrackingDB:
             "final": "ALTER TABLE scrape_queue ADD COLUMN final INTEGER NOT NULL DEFAULT 0",
             "next_attempt_at": "ALTER TABLE scrape_queue ADD COLUMN next_attempt_at TEXT",
             "completed_at": "ALTER TABLE scrape_queue ADD COLUMN completed_at TEXT",
+            "stats_error": "ALTER TABLE scrape_queue ADD COLUMN stats_error TEXT",
         }
         for column, statement in migrations.items():
             if column not in columns:

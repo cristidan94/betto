@@ -44,6 +44,9 @@ class TrackingDbTests(unittest.TestCase):
             db.record_block("/stats/matches/")
             pending = db.pending_matches(limit=10)
             row = db.get_match("2")
+            failed = db.failed_matches(limit=10)
+            stats_before_retry = db.queue_stats()
+            retry_count = db.retry_failed(limit=10)
             count = db.request_count_today()
             needs_playwright = db.needs_playwright("/stats/matches/123")
             db.close()
@@ -51,6 +54,9 @@ class TrackingDbTests(unittest.TestCase):
         self.assertEqual([item["match_id"] for item in pending], ["1", "2"])
         assert row is not None
         self.assertEqual(row["retry_count"], 1)
+        self.assertEqual([item["match_id"] for item in failed], ["2"])
+        self.assertEqual(stats_before_retry["failed"], 1)
+        self.assertEqual(retry_count, 1)
         self.assertEqual(count, 1)
         self.assertTrue(needs_playwright)
 
@@ -72,6 +78,35 @@ class TrackingDbTests(unittest.TestCase):
         self.assertIsNotNone(row["next_attempt_at"])
         self.assertEqual(stats["parsed"], 1)
         self.assertEqual(stats["final"], 0)
+
+    def test_stats_error_tracking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = TrackingDB(Path(tmp) / "test.db")
+            db.upsert_match("1", "/matches/1/a", scheduled_at="2026-05-01")
+            db.record_stats_error("1", "map_123:blocked; map_456:timeout")
+            row = db.get_match("1")
+            assert row is not None
+            self.assertEqual(row["stats_error"], "map_123:blocked; map_456:timeout")
+
+            db.clear_stats_error("1")
+            row = db.get_match("1")
+            assert row is not None
+            self.assertIsNone(row["stats_error"])
+            db.close()
+
+    def test_scraper_state_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = TrackingDB(Path(tmp) / "test.db")
+            db.set_state("backfill_done", "0")
+            db.set_int_state("backfill_next_page", 42)
+            done = db.get_state("backfill_done")
+            page = db.get_int_state("backfill_next_page")
+            missing = db.get_int_state("missing", 7)
+            db.close()
+
+        self.assertEqual(done, "0")
+        self.assertEqual(page, 42)
+        self.assertEqual(missing, 7)
 
 
 if __name__ == "__main__":
