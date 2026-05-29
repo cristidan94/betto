@@ -47,6 +47,15 @@ python -m scraper.cli preflight --create-dirs
 python -m scraper.cli test-live
 python -m scraper.cli export
 python -m scraper.cli backup
+python -m scraper.cli discover-upcoming
+python -m scraper.cli scrape-events --limit 30
+python -m scraper.cli scrape-teams --limit 30
+python -m scraper.cli scrape-players --limit 50
+python -m scraper.cli scrape-rankings --date 2026-05-26
+python -m scraper.cli backfill-rankings
+python -m scraper.cli rankings-status
+python -m scraper.cli tier-registry
+python -m scraper.cli stats-errors
 ```
 
 Run `preflight` before live scraping. It checks local dependencies, proxy configuration, output paths, rate limits, and quiet hours without making any HLTV requests.

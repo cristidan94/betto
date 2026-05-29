@@ -12,9 +12,20 @@ HLTV_PROXY_URL='http://username:password@gate.decodo.com:7000' \
   bash deploy/install-vps.sh --run-live-test
 ```
 
-The script installs OS packages, creates `.venv`, installs Python dependencies, installs Playwright Chromium, writes `.env` if needed, runs preflight, optionally runs the live test, generates systemd units for the current repo path, and enables the timer.
+The script installs OS packages, creates `.venv`, installs Python dependencies, installs Playwright Chromium, writes `.env` if needed, runs tests, runs preflight, reparses any existing raw HTML with the updated parser, optionally runs the live test, generates systemd units for the current repo path, and enables all timers.
 
 Use `--project-dir /path/to/betto` if the repo is not at `/opt/betto`, or `--no-systemd` if you only want local setup.
+
+The install creates six systemd timers:
+
+| Timer | Frequency | What it does |
+|---|---|---|
+| `hltv-scraper.timer` | Every 6h | Discover results + fetch pending matches |
+| `hltv-backfill.timer` | Every 1h | Walk through historical results pages (auto-disables when done) |
+| `hltv-upcoming.timer` | Every 30min | Discover scheduled and live matches from `/matches` |
+| `hltv-rankings.timer` | Daily 04:00 | Backfill missing weekly ranking snapshots |
+| `hltv-entities.timer` | Weekly Mon 05:00 | Scrape event, team, and player pages |
+| `hltv-health.timer` | Daily 06:00 | Health check, validate fixtures, generate report + manifest |
 
 ## Git Push Hook
 
@@ -57,11 +68,26 @@ bash deploy/update-vps.sh
 That script runs:
 
 - `git pull`
-- `bash deploy/install-vps.sh --project-dir /opt/betto`
-- `sudo systemctl start hltv-scraper.service`
-- `journalctl -u hltv-scraper.service -n 100 --no-pager`
+- `pip install -r requirements.txt`
+- `pytest tests/`
+- `preflight --create-dirs`
+- `reparse-raw` (regenerates fixture JSON from saved HTML with the updated parser)
+- Reinstalls systemd units
+- `status --verbose`, `health`, `rankings-status`
+- Optionally starts `hltv-scraper.service`
 
 Use `--branch main` if your GitHub branch is `main`, or `--no-start` if you only want to update code and timer files.
+
+## Status Dashboard
+
+Run the all-in-one status check:
+
+```bash
+cd /opt/betto/scraper
+bash deploy/hltv-status.sh
+```
+
+This shows queue status, health, rankings coverage, stats errors, quality, failed matches, disk usage, backup count, all timer states, and recent logs from every service.
 
 ## Manual Ubuntu Setup
 
@@ -208,18 +234,29 @@ When deploying a version that adds lifecycle columns, no manual migration is nee
 
 ## Manual systemd Timer
 
+The install script generates all systemd units inline. If you need to reinstall just the timers:
+
 ```bash
-sudo cp /opt/betto/scraper/deploy/systemd/hltv-scraper.service /etc/systemd/system/
-sudo cp /opt/betto/scraper/deploy/systemd/hltv-scraper.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now hltv-scraper.timer
-sudo systemctl list-timers hltv-scraper.timer
+cd /opt/betto/scraper
+bash deploy/install-vps.sh --project-dir /opt/betto
 ```
 
-Check logs:
+Check all timers and logs:
 
 ```bash
-journalctl -u hltv-scraper.service -n 100 --no-pager
+sudo systemctl list-timers 'hltv-*' --no-pager
+journalctl -u hltv-scraper.service -n 50 --no-pager
+journalctl -u hltv-backfill.service -n 50 --no-pager
+journalctl -u hltv-upcoming.service -n 50 --no-pager
+journalctl -u hltv-rankings.service -n 50 --no-pager
+journalctl -u hltv-entities.service -n 50 --no-pager
+journalctl -u hltv-health.service -n 50 --no-pager
+```
+
+Or use the status dashboard:
+
+```bash
+bash deploy/hltv-status.sh
 ```
 
 ## Import Into Betto
