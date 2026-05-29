@@ -11,6 +11,7 @@ from scraper.fetcher import FetchResult, HltvFetcher
 from scraper.proxy import ProxyRotator
 from scraper.rankings import (
     parse_ranking_page,
+    rankings_status,
     scrape_rankings,
     scrape_rankings_range,
 )
@@ -128,6 +129,34 @@ class ScrapeRankingsTests(unittest.TestCase):
 
         self.assertEqual(len(results), 3)
         self.assertTrue(all(r["status"] == "ok" for r in results))
+
+
+class RankingsStatusTests(unittest.TestCase):
+    def test_rankings_status_reports_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = ScraperConfig(raw_dir=root / "raw", output_dir=root / "out", db_path=root / "queue.db")
+
+            status = rankings_status(config, date(2026, 5, 12))
+
+        self.assertEqual(status["start_date"], "2026-05-12")
+        self.assertGreater(status["expected"], 0)
+        self.assertEqual(status["existing"], 0)
+        self.assertEqual(status["missing"], status["expected"])
+
+    def test_rankings_status_counts_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = ScraperConfig(raw_dir=root / "raw", output_dir=root / "out", db_path=root / "queue.db")
+            out_dir = root / "raw" / "rankings"
+            out_dir.mkdir(parents=True)
+            (out_dir / "2026-05-12.json").write_text("{}", encoding="utf-8")
+            (out_dir / "2026-05-19.json").write_text("{}", encoding="utf-8")
+
+            status = rankings_status(config, date(2026, 5, 12))
+
+        self.assertEqual(status["existing"], 2)
+        self.assertGreater(status["coverage_pct"], 0)
 
 
 if __name__ == "__main__":

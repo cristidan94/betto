@@ -119,6 +119,31 @@ def _parse_ranking_fallback(html: str) -> list[dict[str, Any]]:
     return teams
 
 
+CS2_RELEASE_DATE = date(2023, 9, 27)
+
+
+def rankings_status(config: ScraperConfig, start_date: date | None = None) -> dict[str, Any]:
+    if start_date is None:
+        start_date = CS2_RELEASE_DATE
+    out_dir = config.raw_dir / "rankings"
+    existing = sorted(p.stem for p in out_dir.glob("*.json")) if out_dir.exists() else []
+    expected: list[str] = []
+    current = _nearest_monday(start_date)
+    today = date.today()
+    while current <= today:
+        expected.append(current.isoformat())
+        current = date.fromordinal(current.toordinal() + 7)
+    missing = [d for d in expected if d not in existing]
+    return {
+        "start_date": start_date.isoformat(),
+        "expected": len(expected),
+        "existing": len(existing),
+        "missing": len(missing),
+        "missing_dates": missing[:20],
+        "coverage_pct": round(len(existing) / len(expected) * 100, 1) if expected else 100.0,
+    }
+
+
 def _extract_int(text: str) -> int | None:
     m = re.search(r"\d+", text)
     return int(m.group(0)) if m else None

@@ -791,6 +791,7 @@ All 10 data gaps identified in the pre-collection audit have been fixed.
 8. **Stars from match pages** — Complete. Fixed `_event()` to call `_match_page_stars()` which extracts stars from `[stars]` attribute, filled star CSS classes, or text patterns.
 9. **Team recent results** — Complete. Added `_team_page_recent_results()` extracting recent match results with match_id, score, opponent, and event. Added `recent_results` field to team page output.
 10. **Player per-map stats and recent form** — Complete. Added `_player_page_map_stats()` for map-specific win/loss stats and `_player_page_recent_form()` for recent match form with map_stats_id, map name, rating, kills/deaths. Added `per_map_stats` and `recent_form` fields to player page output.
+11. **Rankings backfill** — Complete. Added `backfill-rankings` CLI that fetches all missing Monday ranking snapshots from CS2 release date (2023-09-27) or `HLTV_BACKFILL_STOP_DATE` to today. Added `rankings-status` CLI showing coverage percentage and missing dates. Added `rankings_status()` and `CS2_RELEASE_DATE` constant to rankings module.
 
 ### Next
 
@@ -809,6 +810,447 @@ All items complete.
 3. Build VOD transcript ingestion.
 4. Add LLM structured claim extraction.
 5. Add news/social source scoring.
+
+## Backtesting And Prediction System
+
+### Purpose
+
+Before placing real bets, the system needs to prove its edge on historical data. The backtesting system takes every scraped match, computes features using only data available before that match, generates a prediction, and compares against the actual outcome. This is how we know whether we have edge and how large it is.
+
+The core loop is:
+
+```
+for each match in chronological order:
+    features = build_features(match, all_prior_data)
+    prediction = model.predict(features)
+    actual = match.outcome
+    record(prediction, actual)
+evaluate(all_records)
+```
+
+### Architecture
+
+Three modules that build on the scraper output:
+
+```
+scraper/features/       Feature engineering from fixture JSON + rankings
+scraper/model/          Prediction models (Elo, Glicko-2, ML)
+scraper/backtest/       Walk-forward simulation and evaluation
+```
+
+### Module 1: Feature Builder (`scraper/features/`)
+
+The feature builder takes a match and all prior data, and returns a feature vector. Every feature must be point-in-time safe: it uses only information that was available before the match started.
+
+#### Core Feature Categories
+
+**Team Strength Ratings**
+
+- Overall Elo rating per team, updated after each match result.
+- Glicko-2 rating per team with rating deviation (uncertainty).
+- Map-specific Elo: separate rating per team per map.
+- LAN-only and online-only ratings.
+- Elo/Glicko difference between team A and team B at match time.
+
+Elo update rule: after each map, update both teams' ratings using the map outcome. K-factor can vary by event tier. Glicko-2 adds rating deviation that shrinks with more games and grows with inactivity.
+
+**Rankings**
+
+- Team A world ranking at match time (from weekly ranking snapshots).
+- Team B world ranking at match time.
+- Ranking difference.
+- Ranking trend: delta over 1, 2, and 4 weeks.
+- Whether team is top 5, top 10, or top 20.
+
+Implementation: for a given match date, find the most recent Monday ranking snapshot that predates the match. Look up both teams in that snapshot.
+
+**Recent Form**
+
+- Match win rate over last 30, 60, 90 days.
+- Map win rate over last 30, 60, 90 days.
+- Weighted recent form with exponential decay (more recent maps count more).
+- Win rate against top-10, top-20, and below-20 opponents.
+- Win rate in BO1, BO3, BO5 separately.
+- Form on LAN vs online.
+
+Implementation: scan all prior fixtures, filter by team, filter by date window, compute rates. For opponent-quality-adjusted form, cross-reference opponent ranking at the time of each historical match.
+
+**Map Pool**
+
+- Map pick frequency per team (how often each map appears when team plays).
+- Map ban frequency per team (inferred from vetoes).
+- Map win rate per team per map.
+- Map win rate when picked by the team vs picked by opponent.
+- Decider map win rate.
+- Map pool depth: number of maps with >50% win rate over last 90 days.
+- Map pool entropy: how evenly spread the team's maps are.
+- Map comfort index per map: combination of pick frequency and win rate.
+
+**Veto Prediction Features**
+
+- First ban frequency per map per team.
+- First pick frequency per map per team.
+- Opponent-targeted ban rate (does team A ban team B's best map?).
+- Veto surprise score: how often does a team deviate from its historical pattern.
+- Expected map pool overlap given both teams' histories.
+
+**Player Form**
+
+- Average player rating over last 10, 20, 30 maps.
+- ADR trend over recent maps.
+- KAST trend.
+- Opening kill rate trend.
+- Clutch conversion rate.
+- Star player dependency: fraction of team's total kills from the top fragger.
+- Support player consistency: variance of non-star player ratings.
+- Per-map player rating (player X on Inferno vs player X on Mirage).
+
+**Roster Stability**
+
+- Days since last roster change (requires tracking roster snapshots from team pages).
+- Number of roster changes in last 90 days.
+- Core continuity: number of players who have been on the team for >6 months.
+- Stand-in indicator: if any player in the lineup does not match the stored roster.
+- Coach tenure in days.
+
+**Match Context**
+
+- Best-of format (BO1, BO3, BO5).
+- LAN or online.
+- Event tier (1 through 5).
+- Match stage (group, quarterfinal, semifinal, grand final).
+- Elimination match flag (does the loser go home?).
+- Rest days since team's last match.
+- Maps played in last 24, 48, and 72 hours (fatigue proxy).
+- Head-to-head record between the two teams over last 6 and 12 months.
+- Same-event rematch flag (have they already played each other in this event?).
+
+**Half And Side Features**
+
+- Team CT-side win rate over recent maps.
+- Team T-side win rate over recent maps.
+- CT-side vs T-side differential (is the team CT-heavy or T-heavy?).
+- First half win rate.
+- Comeback rate (how often does the team win after losing the first half?).
+- Overtime rate (how often do their maps go to overtime?).
+
+#### Feature Vector Format
+
+Each match produces one feature row:
+
+```python
+@dataclass
+class MatchFeatures:
+    match_id: str
+    scheduled_at: datetime
+    team_a_id: str
+    team_b_id: str
+
+    # Ratings
+    elo_diff: float
+    glicko_diff: float
+    glicko_rd_a: float
+    glicko_rd_b: float
+    ranking_a: int | None
+    ranking_b: int | None
+    ranking_diff: int | None
+
+    # Form
+    form_30d_a: float | None
+    form_30d_b: float | None
+    form_60d_a: float | None
+    form_60d_b: float | None
+    map_winrate_30d_a: float | None
+    map_winrate_30d_b: float | None
+
+    # Map pool
+    map_pool_depth_a: int
+    map_pool_depth_b: int
+    map_pool_overlap: int
+
+    # Context
+    best_of: int
+    is_lan: bool | None
+    event_tier: int | None
+    match_stage: str | None
+    is_elimination: bool
+    rest_days_a: float | None
+    rest_days_b: float | None
+    h2h_wins_a: int
+    h2h_wins_b: int
+
+    # Player
+    star_rating_a: float | None
+    star_rating_b: float | None
+    roster_days_a: int | None
+    roster_days_b: int | None
+```
+
+The feature builder outputs these rows into a CSV or Parquet file indexed by match_id. The model consumes this file.
+
+#### Point-In-Time Safety
+
+The most important rule: no feature can use information from after the match started. This means:
+
+- Form windows must end before `scheduled_at`.
+- Rankings must use the most recent snapshot before `scheduled_at`.
+- Elo ratings must be computed from matches that finished before `scheduled_at`.
+- Player stats must use only maps played before `scheduled_at`.
+
+The feature builder must enforce this strictly. A single leak (using the match's own result or a future match's result to compute a feature) invalidates the entire backtest.
+
+Implementation: sort all matches by `scheduled_at`. Process them in order. After computing features for match N, update the internal state (Elo, form arrays, etc.) using match N's result, so that match N+1 can use the updated state. This is the walk-forward approach.
+
+### Module 2: Prediction Models (`scraper/model/`)
+
+Start with simple models and layer complexity only when the simple model's weaknesses are understood.
+
+#### Model 1: Elo Baseline
+
+The simplest useful model. Each team has a single Elo rating. After each match, update ratings based on the outcome. The prediction for a new match is the win probability derived from the Elo difference.
+
+```
+P(team_a_wins) = 1 / (1 + 10^((elo_b - elo_a) / 400))
+```
+
+Configuration:
+- Starting Elo: 1500 for all teams.
+- K-factor: 32 for tier 1 events, 24 for tier 2, 16 for tier 3+.
+- Update per map or per match (per map is more granular).
+- Optional: home/away advantage for LAN.
+
+Expected accuracy: 58-63% on match winner prediction.
+
+This model exists only to set the floor. If a complex model cannot beat Elo, it has no value.
+
+#### Model 2: Glicko-2
+
+Same concept as Elo but tracks rating deviation (uncertainty). A team that has not played in 30 days has higher uncertainty, which means less confident predictions. This naturally handles teams returning from breaks.
+
+Advantages over Elo:
+- Confidence intervals on predictions.
+- Inactive teams' ratings widen automatically.
+- Can be extended per-map with separate Glicko-2 systems.
+
+#### Model 3: Map-Level Glicko-2
+
+Maintain separate Glicko-2 ratings per team per map. To predict a BO3 match:
+
+1. Predict veto using historical pick/ban frequencies.
+2. For each likely map, predict map winner using map-specific Glicko-2.
+3. Aggregate map win probabilities into match win probability.
+
+This is where the edge starts to show. Markets often price matches at the match level, but map-level strength varies significantly. A team might be 60% to win overall but 80% on their pick and 35% on the opponent's pick.
+
+#### Model 4: Feature-Based ML
+
+Logistic regression or gradient boosted trees (XGBoost/LightGBM) using the full feature vector from Module 1. This can capture interactions that rating systems miss:
+
+- LAN vs online effects for specific teams.
+- Fatigue effects.
+- Event-tier-specific performance.
+- Roster stability interactions.
+
+Training set: all matches before a cutoff date.
+Validation set: matches after the cutoff.
+Feature selection: start with top 10 features by importance, add more only if validation improves.
+
+Overfitting risk: with ~2000-3000 CS2 matches and 30+ features, regularization matters. Use L1/L2 regularization, limit tree depth, and validate on a held-out time period (not random split — always time-split to avoid leakage).
+
+#### Model Outputs
+
+Every model produces:
+
+```python
+@dataclass
+class Prediction:
+    match_id: str
+    model_name: str
+    model_version: str
+    team_a_win_prob: float      # 0.0 to 1.0
+    team_b_win_prob: float      # 1.0 - team_a_win_prob
+    confidence: float           # model-specific confidence (e.g., 1/RD for Glicko)
+    features_used: dict         # snapshot of input features for reproducibility
+    predicted_at: datetime
+```
+
+### Module 3: Walk-Forward Backtester (`scraper/backtest/`)
+
+The backtester iterates through all historical matches and simulates what would have happened if we had bet using the model's predictions.
+
+#### Backtest Loop
+
+```python
+def run_backtest(matches, model, bet_strategy):
+    state = ModelState()       # Elo ratings, form arrays, etc.
+    records = []
+
+    for match in sorted(matches, key=lambda m: m.scheduled_at):
+        features = build_features(match, state)
+        prediction = model.predict(features)
+
+        # Record prediction vs actual
+        actual_winner = match.actual_winner()
+        records.append(BacktestRecord(
+            match_id=match.hltv_id,
+            scheduled_at=match.scheduled_at,
+            predicted_prob_a=prediction.team_a_win_prob,
+            actual_winner=actual_winner,
+            bet_decision=bet_strategy.decide(prediction, market_odds=None),
+        ))
+
+        # Update state with this match's actual result
+        state.update(match)
+
+    return BacktestResult(records)
+```
+
+#### Evaluation Metrics
+
+**Accuracy metrics:**
+
+- Raw accuracy: fraction of matches where the predicted winner was correct.
+- Accuracy by confidence bucket: accuracy for predictions in [50-55%], [55-60%], [60-65%], etc.
+- Accuracy by event tier, match format (BO1/BO3), LAN/online.
+
+**Calibration:**
+
+- Calibration curve: of matches where we predicted 60% team A, did team A actually win ~60% of the time?
+- Perfect calibration means our probabilities are honest. If we predict 70% and team A wins 85% of the time at that level, the model is underconfident.
+- Brier score: mean squared difference between predicted probability and outcome (0 or 1). Lower is better.
+- Log loss: penalizes confident wrong predictions heavily. The primary metric for probability quality.
+
+**Profitability simulation:**
+
+- Flat bet ROI: if we bet $1 on every match where our edge exceeds a threshold, what is the return?
+- Kelly criterion sizing: optimal bet size based on edge and bankroll. Simulate bankroll trajectory over time.
+- CLV (Closing Line Value): compare our prediction at time of bet vs the closing line. Consistently beating the close is the strongest signal of real edge.
+- Drawdown: maximum peak-to-trough bankroll decline. Critical for sizing.
+- Sharpe ratio: risk-adjusted return.
+- Win rate by edge bucket: of bets where our estimated edge was 5-10%, what was the actual ROI?
+
+**Model comparison:**
+
+- Compare Elo baseline vs Glicko-2 vs map-level Glicko-2 vs ML model.
+- For each model, report accuracy, log loss, calibration, and simulated ROI.
+- A model is only useful if it beats the Elo baseline by a meaningful margin on the validation period.
+
+#### Bet Strategy Simulation
+
+The backtester supports pluggable bet strategies:
+
+**Threshold strategy:** Bet on team A if `predicted_prob_a > threshold` and the edge vs implied market odds exceeds a minimum.
+
+**Kelly strategy:** Bet size = `(edge * odds - 1) / (odds - 1)`, capped at a fraction of bankroll. Requires market odds data.
+
+**Flat strategy:** Equal bet size on every qualifying match. Simplest to analyze.
+
+For initial backtesting without market odds data: use the model's own probabilities as a proxy. If the model says 65% and the Elo baseline says 55%, the "edge" is the difference. This is not the same as beating the market, but it shows whether the complex model adds value over the simple one.
+
+Later, when Polymarket odds data is available: compare model probability against market-implied probability. Only bet when model probability exceeds market-implied probability by a configurable threshold (e.g., 5%).
+
+#### Output Format
+
+The backtester produces:
+
+```
+backtest_results/
+  YYYY-MM-DD_model-name/
+    summary.json          Overall metrics
+    predictions.csv       Per-match predictions and outcomes
+    calibration.json      Calibration curve data
+    bankroll.csv          Simulated bankroll trajectory
+    by_tier.json          Metrics broken down by event tier
+    by_format.json        Metrics broken down by BO1/BO3
+    by_month.json         Monthly accuracy and ROI
+```
+
+### Warm-Up Period
+
+Rating systems need history to stabilize. The first N matches (where N is roughly 200-500) produce unreliable ratings because all teams start at the same Elo. The backtest should:
+
+1. Use the first 6 months of data as the warm-up period (ratings stabilize but predictions are not evaluated).
+2. Begin recording predictions only after the warm-up.
+3. Report the warm-up cutoff date in the output.
+
+### Data Requirements
+
+The backtesting system consumes:
+
+- **Fixture JSON files**: match results, maps, scores, players, vetoes, event tier.
+- **Ranking snapshots**: weekly team rankings from `raw/rankings/YYYY-MM-DD.json`.
+- **Event metadata**: LAN/online, location from `raw/events/{id}.json`.
+- **Team metadata**: roster from `raw/teams/{id}.json` (for roster stability features).
+- **Player metadata**: stats from `raw/players/{id}.json` (for player form features).
+
+All of this is already being scraped. The feature builder reads these files directly.
+
+### Implementation Order
+
+**Phase 1: Elo Baseline (simplest useful model)**
+
+1. Build Elo rating engine that processes fixtures chronologically.
+2. Build feature builder that outputs match_id, elo_a, elo_b, elo_diff, actual_winner.
+3. Build backtester that iterates matches and records predictions.
+4. Build evaluation module: accuracy, calibration, log loss.
+5. Output: "Elo predicts CS2 match winners with X% accuracy."
+
+**Phase 2: Glicko-2 + Map-Level Ratings**
+
+1. Replace Elo with Glicko-2 (adds uncertainty tracking).
+2. Add map-level Glicko-2 ratings.
+3. Add veto prediction using historical pick/ban frequencies.
+4. Build BO3 match probability from map-level predictions.
+5. Compare: does map-level Glicko-2 beat overall Glicko-2?
+
+**Phase 3: Feature Engineering**
+
+1. Add ranking features (from ranking snapshots).
+2. Add recent form features (30/60/90 day windows).
+3. Add context features (LAN, tier, stage, rest days).
+4. Add half-score features (CT/T side strength).
+5. Add roster stability features.
+6. Add player form features.
+
+**Phase 4: ML Model**
+
+1. Build training pipeline: features CSV → logistic regression → evaluation.
+2. Feature importance analysis: which features actually help?
+3. Try gradient boosting (XGBoost/LightGBM).
+4. Time-split cross-validation.
+5. Compare ML model vs Glicko-2 baseline.
+
+**Phase 5: Bet Simulation**
+
+1. Add bet strategy simulation with flat bet sizing.
+2. Add Kelly criterion sizing.
+3. Add bankroll trajectory tracking.
+4. Add edge threshold analysis (what minimum edge is profitable?).
+5. When Polymarket data is available: simulate against real market odds.
+
+### CLI Commands
+
+```
+python -m scraper.cli build-features        Build feature CSV from fixtures
+python -m scraper.cli backtest              Run walk-forward backtest
+python -m scraper.cli backtest-report       Generate HTML report from backtest results
+python -m scraper.cli model-compare         Compare multiple models side by side
+python -m scraper.cli rankings-status       Show rankings coverage
+python -m scraper.cli backfill-rankings     Scrape all missing ranking snapshots
+```
+
+### Success Criteria
+
+The backtesting system is useful if:
+
+1. Elo baseline shows >58% accuracy on CS2 matches (sanity check that the data is good).
+2. Map-level Glicko-2 beats overall Glicko-2 by >1% accuracy (confirms map-level modeling has value).
+3. The ML model beats Glicko-2 by >1% on log loss (confirms feature engineering adds value beyond ratings).
+4. Calibration curve shows the model is well-calibrated within 3% across all probability buckets.
+5. Simulated ROI against model-implied fair odds is positive at >2% edge threshold.
+6. No feature leaks future data (verified by the walk-forward structure).
+
+If the Elo baseline cannot reach 55% accuracy, the data quality needs investigation before adding complexity.
 
 ## Biggest Potential Edge Sources
 

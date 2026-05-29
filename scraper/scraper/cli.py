@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scraper.alerts import send_webhook
 from scraper.entity_scraper import scrape_events, scrape_players, scrape_teams
-from scraper.rankings import scrape_rankings, scrape_rankings_range
+from scraper.rankings import CS2_RELEASE_DATE, rankings_status, scrape_rankings, scrape_rankings_range
 from scraper.tier_registry import describe_registry, load_tier_registry
 from scraper.backup import create_backup
 from scraper.backfill import BACKFILL_DONE, BACKFILL_DONE_ALERTED, BACKFILL_EMPTY_PAGES, BACKFILL_NEXT_PAGE, run_backfill
@@ -393,6 +393,48 @@ def cmd_scrape_rankings(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backfill_rankings(args: argparse.Namespace) -> int:
+    from datetime import date as _date
+
+    config = load_config()
+    start = _date.fromisoformat(args.start) if args.start else _date.fromisoformat(config.backfill_stop_date) if config.backfill_stop_date else CS2_RELEASE_DATE
+    end = _date.fromisoformat(args.end) if args.end else None
+    proxy = ProxyRotator(config.proxy_url, config.proxy_regions)
+    limiter = RateLimiter(config.min_delay, config.max_delay, config.cooldown_every, config.cooldown_seconds, config.daily_cap)
+    db = TrackingDB(config.db_path)
+    limiter.request_count = db.request_count_today()
+    fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
+    try:
+        status_before = rankings_status(config, start)
+        results = scrape_rankings_range(fetcher, limiter, config, start, end)
+        scraped = sum(1 for r in results if r.get("status") == "ok")
+        skipped = sum(1 for r in results if r.get("status") == "skipped")
+        errors = sum(1 for r in results if r.get("status") == "error")
+        status_after = rankings_status(config, start)
+        print(json.dumps({
+            "start": start.isoformat(),
+            "scraped": scraped,
+            "skipped": skipped,
+            "errors": errors,
+            "coverage_before": status_before["coverage_pct"],
+            "coverage_after": status_after["coverage_pct"],
+            "remaining": status_after["missing"],
+        }, indent=2))
+    finally:
+        fetcher.close()
+        db.close()
+    return 0
+
+
+def cmd_rankings_status(args: argparse.Namespace) -> int:
+    from datetime import date as _date
+
+    config = load_config()
+    start = _date.fromisoformat(args.start) if args.start else _date.fromisoformat(config.backfill_stop_date) if config.backfill_stop_date else CS2_RELEASE_DATE
+    print(json.dumps(rankings_status(config, start), indent=2))
+    return 0
+
+
 def cmd_tier_registry(args: argparse.Namespace) -> int:
     config = load_config()
     registry = load_tier_registry(config.tier_registry_path)
@@ -544,6 +586,15 @@ def main(argv: list[str] | None = None) -> int:
     scrape_rank.add_argument("--start", default=None, help="Range start date YYYY-MM-DD")
     scrape_rank.add_argument("--end", default=None, help="Range end date YYYY-MM-DD")
     scrape_rank.set_defaults(func=cmd_scrape_rankings)
+
+    bf_rank = subparsers.add_parser("backfill-rankings")
+    bf_rank.add_argument("--start", default=None, help="Start date (defaults to HLTV_BACKFILL_STOP_DATE or CS2 release)")
+    bf_rank.add_argument("--end", default=None, help="End date (defaults to today)")
+    bf_rank.set_defaults(func=cmd_backfill_rankings)
+
+    rank_status = subparsers.add_parser("rankings-status")
+    rank_status.add_argument("--start", default=None, help="Start date for coverage check")
+    rank_status.set_defaults(func=cmd_rankings_status)
 
     tier_reg = subparsers.add_parser("tier-registry")
     tier_reg.set_defaults(func=cmd_tier_registry)
