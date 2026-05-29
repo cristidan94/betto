@@ -20,7 +20,7 @@ def discover_matches(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig
 
 def discover_page(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, page: int) -> dict[str, int | bool]:
     offset = page * 100
-    result = fetcher.fetch(f"https://www.hltv.org/results?stars=4&stars=5&offset={offset}")
+    result = fetcher.fetch(f"https://www.hltv.org/results?offset={offset}")
     if not result.ok:
         return {"ok": False, "page": page, "entries": 0, "allowed": 0, "discovered": 0}
     entries = parse_results_page(result.html)
