@@ -6,6 +6,7 @@ import logging
 import shutil
 from pathlib import Path
 
+from scraper.activity import collect_activity, format_activity
 from scraper.alerts import send_webhook
 from scraper.entity_scraper import scrape_events, scrape_players, scrape_teams
 from scraper.rankings import CS2_RELEASE_DATE, rankings_status, scrape_rankings, scrape_rankings_range
@@ -454,6 +455,16 @@ def cmd_alert(args: argparse.Namespace) -> int:
     return 0 if result.get("sent") or result.get("reason") == "not_configured" else 1
 
 
+def cmd_activity(args: argparse.Namespace) -> int:
+    config = load_config()
+    data = collect_activity(config, days=args.days)
+    if args.json:
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        print(format_activity(data))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="hltv-scraper")
@@ -604,6 +615,11 @@ def main(argv: list[str] | None = None) -> int:
     alert.add_argument("--recent", type=int, default=25)
     alert.add_argument("--sample", type=int, default=10)
     alert.set_defaults(func=cmd_alert)
+
+    activity = subparsers.add_parser("activity")
+    activity.add_argument("--days", type=int, default=7, help="Number of days to look back")
+    activity.add_argument("--json", action="store_true", help="Output raw JSON instead of formatted text")
+    activity.set_defaults(func=cmd_activity)
 
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):

@@ -56,6 +56,9 @@ python -m scraper.cli backfill-rankings
 python -m scraper.cli rankings-status
 python -m scraper.cli tier-registry
 python -m scraper.cli stats-errors
+python -m scraper.cli activity
+python -m scraper.cli activity --days 1
+python -m scraper.cli activity --json
 ```
 
 Run `preflight` before live scraping. It checks local dependencies, proxy configuration, output paths, rate limits, and quiet hours without making any HLTV requests.
