@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 _logger = logging.getLogger(__name__)
@@ -23,8 +24,12 @@ class PlaywrightSession:
         page = context.new_page()
         try:
             response = page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(1500)
             status = response.status if response is not None else 0
+            if status in {403, 503} or _is_challenge_page(page):
+                page.wait_for_timeout(6000)
+                status = _final_status(page, status)
+            else:
+                page.wait_for_timeout(1500)
             html = page.content()
             self._request_count += 1
             return status, html
@@ -46,6 +51,24 @@ class PlaywrightSession:
         self._playwright = sync_playwright().start()
         proxy = playwright_proxy_config(self.proxy_url)
         self._browser = self._playwright.chromium.launch(headless=True, proxy=proxy)
+
+
+def _is_challenge_page(page: Any) -> bool:
+    try:
+        content = page.content().lower()
+        return any(m in content for m in ("cf-challenge", "checking your browser", "just a moment"))
+    except Exception:
+        return False
+
+
+def _final_status(page: Any, original_status: int) -> int:
+    try:
+        content = page.content().lower()
+        if "hltv.org" in content and "cf-challenge" not in content and "checking your browser" not in content:
+            return 200
+    except Exception:
+        pass
+    return original_status
 
 
 def playwright_proxy_config(proxy_url: str | None) -> dict[str, str] | None:
