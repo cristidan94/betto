@@ -48,12 +48,14 @@ def scrape_one_match(
     _apply_queue_metadata(match_data, db.get_match(match_id), config)
 
     stats_data: dict[str, Any] = {}
+    limiter.sleep()
     stats_error = _fetch_stats_page(match_id, match_data, fetcher, db, limiter)
     if stats_error is None:
         stats_html_path = config.raw_dir / "matches" / match_id / "stats.html"
         if stats_html_path.exists():
             stats_data = parse_stats_page(stats_html_path.read_text(encoding="utf-8"))
 
+    team_slug = _build_team_slug(match_data)
     map_stats: dict[str, list[dict[str, Any]]] = {}
     map_errors: list[str] = []
     db.set_maps_total(match_id, len(match_data.get("maps", [])))
@@ -61,7 +63,7 @@ def scrape_one_match(
         map_stats_id = item.get("map_stats_id")
         if not map_stats_id:
             continue
-        parsed, error = _fetch_map_stats(match_id, map_stats_id, fetcher, db, limiter)
+        parsed, error = _fetch_map_stats(match_id, map_stats_id, team_slug, fetcher, db, limiter)
         if parsed is not None:
             map_stats[map_stats_id] = parsed
         elif error:
@@ -101,11 +103,12 @@ def _fetch_stats_page(
 def _fetch_map_stats(
     match_id: str,
     map_stats_id: str,
+    team_slug: str,
     fetcher: HltvFetcher,
     db: TrackingDB,
     limiter: RateLimiter,
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
-    url = f"https://www.hltv.org/stats/matches/mapstatsid/{map_stats_id}/slug"
+    url = f"https://www.hltv.org/stats/matches/mapstatsid/{map_stats_id}/{team_slug}"
     for attempt in range(1, MAX_MAP_STATS_RETRIES + 1):
         limiter.sleep()
         result = fetcher.fetch(url)
@@ -121,6 +124,14 @@ def _fetch_map_stats(
         if attempt < MAX_MAP_STATS_RETRIES:
             limiter.sleep()
     return None, f"map_{map_stats_id}:{_classify_fetch_error(result)}"
+
+
+def _build_team_slug(match_data: dict[str, Any]) -> str:
+    team_a = match_data.get("team_a") or {}
+    team_b = match_data.get("team_b") or {}
+    a_name = re.sub(r"[^a-z0-9]+", "-", str(team_a.get("name") or "team1").lower()).strip("-")
+    b_name = re.sub(r"[^a-z0-9]+", "-", str(team_b.get("name") or "team2").lower()).strip("-")
+    return f"{a_name}-vs-{b_name}"
 
 
 def _classify_fetch_error(result: Any) -> str:

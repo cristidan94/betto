@@ -77,12 +77,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         for row in db.pending_matches(limit=args.limit or 50):
             if limiter.daily_cap_reached():
                 break
-            proxy.start_sticky_session()
-            try:
-                if scrape_one_match(row["match_id"], row["match_url"], fetcher, db, limiter, config):
-                    fetched += 1
-            finally:
-                proxy.end_sticky_session()
+            if scrape_one_match(row["match_id"], row["match_url"], fetcher, db, limiter, config):
+                fetched += 1
         print(json.dumps({"fetched": fetched}))
     finally:
         fetcher.close()

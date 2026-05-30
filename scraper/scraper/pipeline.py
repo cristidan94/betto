@@ -45,13 +45,9 @@ def run_pipeline(config: ScraperConfig | None = None, max_discovery_pages: int =
             if backoff:
                 _logger.warning("failure backoff: pausing %.0fs", backoff)
                 time.sleep(backoff)
-            proxy.start_sticky_session()
-            try:
-                result = scrape_one_match(row["match_id"], row["match_url"], fetcher, db, limiter, config)
-                if result:
-                    fetched += 1
-            finally:
-                proxy.end_sticky_session()
+            result = scrape_one_match(row["match_id"], row["match_url"], fetcher, db, limiter, config)
+            if result:
+                fetched += 1
         return {"discovered": discovered, "fetched": fetched, "queue": db.queue_stats()}
     finally:
         fetcher.close()
