@@ -22,8 +22,9 @@ class PlaywrightSession:
             self.close()
             self._start()
         if self._context is None:
+            clean = {k: v for k, v in (headers or {}).items() if k.lower() != "user-agent"}
             self._context = self._browser.new_context(
-                extra_http_headers=headers or {},
+                extra_http_headers=clean,
                 ignore_https_errors=not self.verify_tls,
             )
         page = self._context.new_page()
@@ -31,7 +32,11 @@ class PlaywrightSession:
             response = page.goto(url, wait_until="domcontentloaded", timeout=60000)
             status = response.status if response is not None else 0
             if status in {403, 503} or _is_challenge_page(page):
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(8000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
                 status = _final_status(page, status)
             else:
                 page.wait_for_timeout(1500)
