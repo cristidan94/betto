@@ -37,6 +37,7 @@ def scrape_one_match(
     config: ScraperConfig,
 ) -> ScrapedMatch | None:
     url = match_url if match_url.startswith("http") else f"https://www.hltv.org{match_url}"
+    limiter.sleep()
     result = fetcher.fetch(url)
     if not result.ok:
         db.record_error(match_id, f"match fetch failed: {result.status}")

@@ -49,6 +49,7 @@ class HltvFetcher:
             return result
         self._db.record_block(extract_url_pattern(url))
         self._limiter.record_failure()
+        self._limiter.sleep()
         fallback = self._fetch_playwright(url)
         if fallback.ok:
             self._limiter.record_success()
