@@ -70,7 +70,7 @@ def run_backfill(
                 db.set_state(BACKFILL_DONE, "1")
                 db.set_state(BACKFILL_COMPLETED_AT, _utc_now())
                 break
-            page_result = discover_page(fetcher, db, config, next_page)
+            page_result = discover_page(fetcher, db, config, next_page, limiter=limiter)
             if not page_result["ok"]:
                 break
             scanned += 1

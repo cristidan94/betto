@@ -1,27 +1,37 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from scraper.config import ScraperConfig
 from scraper.fetcher import HltvFetcher
 from scraper.parser import parse_results_page, parse_upcoming_page
 from scraper.tracking_db import TrackingDB
 
+if TYPE_CHECKING:
+    from scraper.rate_limiter import RateLimiter
 
-def discover_matches(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, max_pages: int = 10, start_page: int = 0) -> int:
+_logger = logging.getLogger(__name__)
+
+
+def discover_matches(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, max_pages: int = 10, start_page: int = 0, *, limiter: RateLimiter | None = None) -> int:
     discovered = 0
     for page in range(start_page, start_page + max_pages):
-        result = discover_page(fetcher, db, config, page)
+        result = discover_page(fetcher, db, config, page, limiter=limiter)
         if not result["ok"]:
             continue
         discovered += int(result["discovered"])
     return discovered
 
 
-def discover_page(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, page: int) -> dict[str, int | bool]:
+def discover_page(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, page: int, *, limiter: RateLimiter | None = None) -> dict[str, int | bool]:
     offset = page * 100
+    if limiter:
+        limiter.sleep()
     result = fetcher.fetch(f"https://www.hltv.org/results?offset={offset}")
     if not result.ok:
+        _logger.warning("discover page %d failed: status=%d", page, result.status)
         return {"ok": False, "page": page, "entries": 0, "allowed": 0, "discovered": 0}
     entries = parse_results_page(result.html)
     allowed = 0
@@ -54,9 +64,12 @@ def discover_page(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, p
     }
 
 
-def discover_upcoming(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig) -> dict[str, int]:
+def discover_upcoming(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, *, limiter: RateLimiter | None = None) -> dict[str, int]:
+    if limiter:
+        limiter.sleep()
     result = fetcher.fetch("https://www.hltv.org/matches")
     if not result.ok:
+        _logger.warning("discover upcoming failed: status=%d", result.status)
         return {"ok": False, "entries": 0, "allowed": 0, "discovered": 0, "live": 0}
     entries = parse_upcoming_page(result.html)
     allowed = 0

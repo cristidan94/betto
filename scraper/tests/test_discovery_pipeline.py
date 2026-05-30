@@ -109,7 +109,7 @@ class DiscoveryPipelineTests(unittest.TestCase):
         discover.assert_not_called()
 
     def test_run_pipeline_discovers_and_fetches_pending_without_network(self) -> None:
-        def fake_discover(fetcher, db: TrackingDB, config: ScraperConfig, max_pages: int) -> int:
+        def fake_discover(fetcher, db: TrackingDB, config: ScraperConfig, max_pages: int, **kwargs) -> int:
             db.upsert_match("2371234", "/matches/2371234/navi-vs-faze", event_name="IEM Cologne", priority_tier=1)
             return 1
 
@@ -150,7 +150,7 @@ class DiscoveryPipelineTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["max_matches"], 40)
 
     def test_backfill_auto_persists_cursor_and_discovers_without_network(self) -> None:
-        def fake_page(fetcher, db: TrackingDB, config: ScraperConfig, page: int) -> dict:
+        def fake_page(fetcher, db: TrackingDB, config: ScraperConfig, page: int, **kwargs) -> dict:
             if page >= 2:
                 return {"ok": True, "page": page, "entries": 0, "allowed": 0, "discovered": 0}
             db.upsert_match(str(page), f"/matches/{page}/a-vs-b", event_name="IEM Cologne", priority_tier=1)

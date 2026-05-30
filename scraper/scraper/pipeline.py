@@ -36,7 +36,7 @@ def run_pipeline(config: ScraperConfig | None = None, max_discovery_pages: int =
             return {"skipped": True, "reason": "quiet_hours"}
         if limiter.daily_cap_reached():
             return {"skipped": True, "reason": "daily_cap"}
-        discovered = discover_matches(fetcher, db, config, max_pages=max_discovery_pages)
+        discovered = discover_matches(fetcher, db, config, max_pages=max_discovery_pages, limiter=limiter)
         fetched = 0
         for row in db.pending_matches(limit=max_matches):
             if limiter.daily_cap_reached():

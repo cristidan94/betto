@@ -41,7 +41,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
     limiter.request_count = db.request_count_today()
     fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
     try:
-        count = discover_matches(fetcher, db, config, max_pages=args.limit or 10)
+        count = discover_matches(fetcher, db, config, max_pages=args.limit or 10, limiter=limiter)
         print(json.dumps({"discovered": count}))
     finally:
         fetcher.close()
@@ -57,7 +57,7 @@ def cmd_discover_upcoming(args: argparse.Namespace) -> int:
     limiter.request_count = db.request_count_today()
     fetcher = HltvFetcher(proxy, limiter, db, config.raw_dir)
     try:
-        result = discover_upcoming(fetcher, db, config)
+        result = discover_upcoming(fetcher, db, config, limiter=limiter)
         print(json.dumps(result, indent=2))
     finally:
         fetcher.close()

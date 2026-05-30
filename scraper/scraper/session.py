@@ -13,6 +13,7 @@ class PlaywrightSession:
         self.verify_tls = verify_tls
         self._playwright = None
         self._browser = None
+        self._context = None
         self._request_count = 0
         self._max_requests = 15
 
@@ -20,8 +21,12 @@ class PlaywrightSession:
         if self._browser is None or self._request_count >= self._max_requests:
             self.close()
             self._start()
-        context = self._browser.new_context(extra_http_headers=headers or {}, ignore_https_errors=not self.verify_tls)
-        page = context.new_page()
+        if self._context is None:
+            self._context = self._browser.new_context(
+                extra_http_headers=headers or {},
+                ignore_https_errors=not self.verify_tls,
+            )
+        page = self._context.new_page()
         try:
             response = page.goto(url, wait_until="domcontentloaded", timeout=60000)
             status = response.status if response is not None else 0
@@ -34,9 +39,12 @@ class PlaywrightSession:
             self._request_count += 1
             return status, html
         finally:
-            context.close()
+            page.close()
 
     def close(self) -> None:
+        if self._context is not None:
+            self._context.close()
+            self._context = None
         if self._browser is not None:
             self._browser.close()
             self._browser = None

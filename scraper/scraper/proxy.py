@@ -17,7 +17,10 @@ class ProxyRotator:
         if not self.proxy_url:
             return None
         session = self._sticky_session or _session_id()
-        region = self.current_region or next(self._regions)
+        if self._sticky_session:
+            region = self.current_region or next(self._regions)
+        else:
+            region = next(self._regions)
         self.current_region = region
         return self.proxy_url.replace("{session}", session).replace("{region}", region)
 

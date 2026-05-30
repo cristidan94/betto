@@ -93,6 +93,8 @@ class HltvFetcher:
         proxy = self._proxy.next_proxy()
         if self._playwright is None:
             self._playwright = PlaywrightSession(proxy, verify_tls=self._verify_tls)
+        else:
+            self._playwright.proxy_url = proxy
         try:
             status, html = self._playwright.fetch(url, random_headers())
         except Exception as exc:

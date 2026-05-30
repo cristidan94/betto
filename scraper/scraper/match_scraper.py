@@ -122,8 +122,6 @@ def _fetch_map_stats(
             return None, f"map_{map_stats_id}:parse_empty"
         if result.status == 404:
             return None, f"map_{map_stats_id}:404"
-        if attempt < MAX_MAP_STATS_RETRIES:
-            limiter.sleep()
     return None, f"map_{map_stats_id}:{_classify_fetch_error(result)}"
 
 
