@@ -49,6 +49,7 @@ rsync -av --delete \
   --exclude='data/' \
   --exclude='backups/' \
   --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' \
   "$REPO_DIR/scraper/" "$SCRAPER_DIR/"
 
 echo ""
