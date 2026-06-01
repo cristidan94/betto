@@ -89,6 +89,8 @@ def scrape_one_match(
 
     scraped = _assemble_match(match_data, stats_data.get("players", []), map_stats)
     write_fixture_json(scraped, config.output_dir)
+    if _has_all_player_stats(scraped):
+        db.mark_stats_fetched(match_id)
     _update_lifecycle(db, scraped)
     return scraped
 
@@ -182,6 +184,20 @@ def _finished_match_complete(scraped: ScrapedMatch) -> bool:
     maps_with_stats_ids = [item for item in scraped.maps if item.map_stats_id]
     if not maps_with_stats_ids:
         return True
+    return all(item.player_stats for item in maps_with_stats_ids)
+
+
+def _has_all_player_stats(scraped: ScrapedMatch) -> bool:
+    """True when every map that has a stats id carries player stats.
+
+    Player stats now arrive embedded in the match page, so the standalone
+    /stats/ fetch (the only other caller of mark_stats_fetched) rarely runs.
+    Setting the flag here makes stats_fetched reflect actual stats presence
+    regardless of which path produced them.
+    """
+    maps_with_stats_ids = [item for item in scraped.maps if item.map_stats_id]
+    if not maps_with_stats_ids:
+        return False
     return all(item.player_stats for item in maps_with_stats_ids)
 
 
