@@ -79,6 +79,9 @@ class ScraperConfig:
     backfill_max_page: int | None = None
     backfill_stop_date: str | None = None
     alert_webhook_url: str = ""
+    unblocker_proxy: str = ""
+    unblocker_user: str = ""
+    unblocker_pass: str = ""
     tier_registry_path: Path | None = None
     event_tier_overrides: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_TIER_OVERRIDES))
     event_allow_list: list[str] = field(default_factory=lambda: list(EVENT_ALLOW_LIST))
@@ -113,6 +116,9 @@ def load_config() -> ScraperConfig:
         backfill_max_page=_optional_int(os.environ.get("HLTV_BACKFILL_MAX_PAGE")),
         backfill_stop_date=_optional_str(os.environ.get("HLTV_BACKFILL_STOP_DATE")),
         alert_webhook_url=os.environ.get("HLTV_ALERT_WEBHOOK_URL", ""),
+        unblocker_proxy=os.environ.get("HLTV_UNBLOCKER_PROXY", ""),
+        unblocker_user=os.environ.get("HLTV_UNBLOCKER_USER", ""),
+        unblocker_pass=os.environ.get("HLTV_UNBLOCKER_PASS", ""),
         tier_registry_path=registry_path,
         event_tier_overrides=tier_overrides,
         event_allow_list=allow_list,

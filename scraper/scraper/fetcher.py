@@ -11,6 +11,14 @@ from scraper.session import PlaywrightSession
 from scraper.tracking_db import TrackingDB
 
 
+# curl_cffi browser fingerprints that reliably pass HLTV's Cloudflare edge.
+# Safari impersonations are excluded: they consistently draw the managed
+# challenge. Each retry rotates the fingerprint (and the proxy IP/region) so an
+# intermittent block on one combination is retried on a fresh one.
+CURL_IMPERSONATIONS = ("chrome124", "chrome120", "chrome131", "chrome116")
+DEFAULT_CURL_ATTEMPTS = 3
+
+
 @dataclass(frozen=True)
 class FetchResult:
     status: int
@@ -32,23 +40,34 @@ class HltvFetcher:
         self._raw_dir = raw_dir
         self._playwright: PlaywrightSession | None = None
         self._verify_tls = _env_verify_tls()
+        self._curl_attempts = _env_curl_attempts()
+        self._use_playwright = _env_use_playwright()
+        self._impersonate_index = 0
 
     def fetch(self, url: str) -> FetchResult:
         if self._limiter.daily_cap_reached():
             return FetchResult(0, "daily cap reached", "rate_limiter", 0, 17)
-        if self._db.needs_playwright(extract_url_pattern(url)):
-            result = self._fetch_playwright(url)
-            if result.ok:
-                self._limiter.record_success()
-            else:
-                self._limiter.record_failure()
-            return result
+        # Always try curl_cffi first: it is the only path that clears HLTV's
+        # Cloudflare edge, and it does so intermittently, so we retry with a
+        # rotated fingerprint and a fresh proxy IP on each attempt. (Headless
+        # Playwright cannot solve the managed challenge, so it is only a
+        # last-resort fallback and can be disabled entirely via env.)
         result = self._fetch_curl(url)
+        for attempt in range(1, self._curl_attempts):
+            if result.ok:
+                break
+            self._limiter.record_failure()
+            if result.status == 404:
+                return result
+            self._limiter.sleep()
+            result = self._fetch_curl(url)
         if result.ok:
             self._limiter.record_success()
             return result
         self._db.record_block(extract_url_pattern(url))
         self._limiter.record_failure()
+        if not self._use_playwright:
+            return result
         self._limiter.sleep()
         fallback = self._fetch_playwright(url)
         if fallback.ok:
@@ -65,6 +84,8 @@ class HltvFetcher:
     def _fetch_curl(self, url: str) -> FetchResult:
         start = time.perf_counter()
         proxy = self._proxy.next_proxy()
+        impersonate = CURL_IMPERSONATIONS[self._impersonate_index % len(CURL_IMPERSONATIONS)]
+        self._impersonate_index += 1
         try:
             from curl_cffi import requests as curl_requests
 
@@ -74,7 +95,7 @@ class HltvFetcher:
                 headers=random_headers(),
                 proxies=proxies,
                 timeout=45,
-                impersonate="chrome124",
+                impersonate=impersonate,
                 verify=self._verify_tls,
             )
             html = resp.text
@@ -117,4 +138,21 @@ def _env_verify_tls() -> bool:
     import os
 
     value = os.environ.get("HLTV_VERIFY_TLS", "true")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_curl_attempts() -> int:
+    import os
+
+    try:
+        attempts = int(os.environ.get("HLTV_CURL_ATTEMPTS", str(DEFAULT_CURL_ATTEMPTS)))
+    except ValueError:
+        return DEFAULT_CURL_ATTEMPTS
+    return max(1, attempts)
+
+
+def _env_use_playwright() -> bool:
+    import os
+
+    value = os.environ.get("HLTV_USE_PLAYWRIGHT", "true")
     return value.strip().lower() not in {"0", "false", "no", "off"}

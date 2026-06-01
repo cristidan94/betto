@@ -72,6 +72,9 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(payload["event"]["hltv_stars"], 5)
         self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["kills"], 25)
         self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["ct_kills"], 14)
+        # map_stats_id must round-trip into the fixture: enrich-stats relies on it
+        # to build the /stats/ URL, so dropping it silently disables enrichment.
+        self.assertEqual(payload["maps"][0]["map_stats_id"], "555")
 
     def test_write_fixture_json(self) -> None:
         match = ScrapedMatch(

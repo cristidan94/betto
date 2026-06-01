@@ -50,6 +50,11 @@ class ScrapedPlayerMapStats:
     t_kills: int | None = None
     t_deaths: int | None = None
     clutches_won: int | None = None
+    # Detailed fields available only from the /stats/ map page (via unblocker).
+    hs_kills: int | None = None
+    multi_kills: int | None = None
+    flash_assists: int | None = None
+    trade_deaths: int | None = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +123,7 @@ def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
             {
                 "map_index": m.map_index,
                 "map_name": m.map_name,
+                "map_stats_id": m.map_stats_id,
                 "team_a_score": m.team_a_score,
                 "team_b_score": m.team_b_score,
                 "winner_hltv_id": m.winner_hltv_id,
@@ -142,6 +148,10 @@ def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
                         "t_kills": ps.t_kills,
                         "t_deaths": ps.t_deaths,
                         "clutches_won": ps.clutches_won,
+                        "hs_kills": ps.hs_kills,
+                        "multi_kills": ps.multi_kills,
+                        "flash_assists": ps.flash_assists,
+                        "trade_deaths": ps.trade_deaths,
                     }
                     for ps in m.player_stats
                 },

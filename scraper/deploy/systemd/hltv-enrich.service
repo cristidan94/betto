@@ -1,0 +1,16 @@
+[Unit]
+Description=HLTV /stats/ enrichment via Decodo unblocker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/betto/scraper
+EnvironmentFile=/opt/betto/scraper/.env
+# Bounded batch per run: the unblocker is slow (~40-50s/request, ~50% timeout
+# flakiness) and metered, so cap the map requests and let the timer grind through
+# the candidate backlog. Tune --limit / --max-tier to taste; runs become no-ops
+# once every finished tier<=max-tier map is already enriched.
+ExecStart=/opt/betto/scraper/.venv/bin/python -m scraper.cli enrich-stats --max-tier 1 --limit 25 --min-delay 3
+Nice=10
+TimeoutStartSec=3600

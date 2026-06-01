@@ -41,7 +41,62 @@ STATS_HTML = """
 """
 
 
+MATCH_WITH_EMBEDDED_STATS_HTML = """
+<html><body>
+  <div data-unix="1772539200000"></div>
+  <a href="/team/4608/navi">NAVI</a>
+  <a href="/team/6667/faze">FaZe</a>
+  <a href="/events/7148/iem-katowice">IEM Katowice</a>
+  <div>Best of 1</div>
+  <div class="mapholder">
+    <div class="mapname">Inferno</div>
+    <div class="results-left won"><div class="results-team-score">13</div></div>
+    <div class="results-right"><div class="results-team-score">9</div></div>
+    <div class="results-center-half-score">( 7 : 5 ; 6 : 4 )</div>
+    <a href="/stats/matches/mapstatsid/98765/navi-vs-faze">map stats</a>
+  </div>
+  <div id="matchstats" class="match-stats matchstats">
+    <div id="98765-content" class="stats-content">
+      <table class="table totalstats">
+        <tr><th><a href="/team/4608/navi">NAVI</a></th><td>K-D</td><td>ADR</td><td>KAST</td><td>Rating 3.0</td></tr>
+        <tr><td><a href="/player/7998/s1mple">s1mple</a></td><td>25-15</td><td>92.1</td><td>78.0%</td><td>1.40</td></tr>
+      </table>
+      <table class="table ctstats hidden">
+        <tr><th><a href="/team/4608/navi">NAVI</a></th><td>K-D</td><td>ADR</td><td>KAST</td><td>Rating 3.0</td></tr>
+        <tr><td><a href="/player/7998/s1mple">s1mple</a></td><td>15-7</td><td>110.0</td><td>85.0%</td><td>1.70</td></tr>
+      </table>
+      <table class="table tstats hidden">
+        <tr><th><a href="/team/4608/navi">NAVI</a></th><td>K-D</td><td>ADR</td><td>KAST</td><td>Rating 3.0</td></tr>
+        <tr><td><a href="/player/7998/s1mple">s1mple</a></td><td>10-8</td><td>74.2</td><td>71.0%</td><td>1.10</td></tr>
+      </table>
+    </div>
+  </div>
+</body></html>
+"""
+
+
 class ParserTests(unittest.TestCase):
+    def test_parse_match_page_extracts_embedded_map_player_stats_with_sides(self) -> None:
+        match = parse_match_page(MATCH_WITH_EMBEDDED_STATS_HTML, "2400001")
+        self.assertEqual(match["status"], "finished")
+        self.assertEqual(len(match["maps"]), 1)
+        m = match["maps"][0]
+        self.assertEqual(m["map_name"], "Inferno")
+        self.assertEqual((m["team_a_score"], m["team_b_score"]), (13, 9))
+        self.assertEqual(m["map_stats_id"], "98765")
+        self.assertEqual((m["team_a_first_half"], m["team_b_first_half"]), (7, 5))
+        stats = {row["player_hltv_id"]: row for row in m["player_stats"]}
+        s1mple = stats["7998"]
+        self.assertEqual((s1mple["kills"], s1mple["deaths"]), (25, 15))
+        self.assertEqual(s1mple["adr"], 92.1)
+        self.assertEqual(s1mple["kast_pct"], 78.0)
+        self.assertEqual(s1mple["rating"], 1.40)
+        # CT/T side splits merged from the hidden per-side tables.
+        self.assertEqual((s1mple["ct_kills"], s1mple["ct_deaths"]), (15, 7))
+        self.assertEqual((s1mple["t_kills"], s1mple["t_deaths"]), (10, 8))
+        # Players list derived from the scoreboard, not every /player/ link.
+        self.assertEqual([p["hltv_id"] for p in match["players"]], ["7998"])
+
     def test_parse_results_page_deduplicates_matches(self) -> None:
         entries = parse_results_page(RESULTS_HTML)
 

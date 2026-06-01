@@ -68,20 +68,35 @@ class PlaywrightSession:
 
 def _is_challenge_page(page: Any) -> bool:
     try:
+        title = (page.title() or "").lower()
+        if "just a moment" in title or "attention required" in title:
+            return True
         content = page.content().lower()
-        return any(m in content for m in ("cf-challenge", "checking your browser", "just a moment"))
+        return any(m in content for m in _CHALLENGE_MARKERS)
     except Exception:
         return False
 
 
 def _final_status(page: Any, original_status: int) -> int:
-    try:
-        content = page.content().lower()
-        if "hltv.org" in content and "cf-challenge" not in content and "checking your browser" not in content:
-            return 200
-    except Exception:
-        pass
-    return original_status
+    # Only treat the page as solved if it no longer looks like a Cloudflare
+    # interstitial. The previous heuristic accepted any page mentioning
+    # "hltv.org", which the challenge page itself does (in its CSP headers),
+    # so challenge HTML was silently saved and parsed as real match data.
+    if _is_challenge_page(page):
+        return original_status if original_status else 403
+    return 200
+
+
+_CHALLENGE_MARKERS = (
+    "cf-challenge",
+    "checking your browser",
+    "just a moment",
+    "enable javascript and cookies",
+    "cf_chl_opt",
+    "__cf_chl",
+    "window._cf_chl",
+    "challenge-error",
+)
 
 
 def playwright_proxy_config(proxy_url: str | None) -> dict[str, str] | None:

@@ -121,6 +121,9 @@ class FetcherMatchScraperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = TrackingDB(Path(tmp) / "queue.db")
             fetcher = FallbackFetcher(db, Path(tmp) / "raw")
+            fetcher._limiter = NoSleepLimiter()
+            fetcher._curl_attempts = 1
+            fetcher._use_playwright = True
 
             result = fetcher.fetch("https://www.hltv.org/matches/2371234/navi-vs-faze")
             fetcher.fetch("https://www.hltv.org/matches/2371234/navi-vs-faze")

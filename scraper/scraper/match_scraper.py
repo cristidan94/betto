@@ -48,27 +48,38 @@ def scrape_one_match(
     match_data = parse_match_page(result.html, match_id)
     _apply_queue_metadata(match_data, db.get_match(match_id), config)
 
-    stats_data: dict[str, Any] = {}
-    limiter.sleep()
-    stats_error = _fetch_stats_page(match_id, match_data, fetcher, db, limiter)
-    if stats_error is None:
-        stats_html_path = config.raw_dir / "matches" / match_id / "stats.html"
-        if stats_html_path.exists():
-            stats_data = parse_stats_page(stats_html_path.read_text(encoding="utf-8"))
+    maps = match_data.get("maps", [])
+    db.set_maps_total(match_id, len(maps))
 
-    team_slug = _build_team_slug(match_data)
+    # Player stats are embedded directly in the match page's #matchstats tabs.
+    # Count those maps as fetched and only fall back to the (heavily blocked)
+    # /stats/ pages for maps whose stats aren't embedded.
+    for item in maps:
+        if item.get("player_stats"):
+            db.increment_maps_fetched(match_id)
+    maps_needing_fetch = [item for item in maps if item.get("map_stats_id") and not item.get("player_stats")]
+
+    stats_data: dict[str, Any] = {}
     map_stats: dict[str, list[dict[str, Any]]] = {}
     map_errors: list[str] = []
-    db.set_maps_total(match_id, len(match_data.get("maps", [])))
-    for item in match_data.get("maps", []):
-        map_stats_id = item.get("map_stats_id")
-        if not map_stats_id:
-            continue
-        parsed, error = _fetch_map_stats(match_id, map_stats_id, team_slug, fetcher, db, limiter)
-        if parsed is not None:
-            map_stats[map_stats_id] = parsed
-        elif error:
-            map_errors.append(error)
+    stats_error: str | None = None
+
+    if maps_needing_fetch:
+        limiter.sleep()
+        stats_error = _fetch_stats_page(match_id, match_data, fetcher, db, limiter)
+        if stats_error is None:
+            stats_html_path = config.raw_dir / "matches" / match_id / "stats.html"
+            if stats_html_path.exists():
+                stats_data = parse_stats_page(stats_html_path.read_text(encoding="utf-8"))
+
+        team_slug = _build_team_slug(match_data)
+        for item in maps_needing_fetch:
+            map_stats_id = item.get("map_stats_id")
+            parsed, error = _fetch_map_stats(match_id, map_stats_id, team_slug, fetcher, db, limiter)
+            if parsed is not None:
+                map_stats[map_stats_id] = parsed
+            elif error:
+                map_errors.append(error)
 
     if stats_error or map_errors:
         combined = "; ".join(filter(None, [stats_error] + map_errors))
@@ -190,7 +201,13 @@ def _assemble_match(
     maps = []
     for row in match_data.get("maps", []):
         stats_id = row.get("map_stats_id")
-        stats = tuple(_player_stat(item) for item in map_stats.get(str(stats_id), [])) if stats_id else ()
+        embedded = row.get("player_stats")
+        if embedded:
+            stats = tuple(_player_stat_embedded(item) for item in embedded)
+        elif stats_id:
+            stats = tuple(_player_stat(item) for item in map_stats.get(str(stats_id), []))
+        else:
+            stats = ()
         maps.append(
             ScrapedMap(
                 map_index=int(row["map_index"]),
@@ -248,6 +265,30 @@ def _priority_from_event(event_name: str, stars: Any, config: ScraperConfig) -> 
         return max(1, 6 - int(stars)) if stars is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _player_stat_embedded(row: dict[str, Any]) -> ScrapedPlayerMapStats:
+    """Build map player stats from the structured rows parsed out of the match
+    page's embedded #matchstats tabs (kills/deaths/adr/kast/rating)."""
+    return ScrapedPlayerMapStats(
+        player_hltv_id=str(row.get("player_hltv_id") or ""),
+        nickname=str(row.get("nickname") or ""),
+        team_hltv_id=str(row.get("team_hltv_id") or ""),
+        kills=_safe_int(row.get("kills")),
+        deaths=_safe_int(row.get("deaths")),
+        assists=_safe_int(row.get("assists")),
+        adr=_safe_float(row.get("adr")),
+        rating=_safe_float(row.get("rating")),
+        headshot_pct=_safe_float(row.get("headshot_pct")),
+        kast_pct=_safe_float(row.get("kast_pct")),
+        first_kills=_safe_int(row.get("first_kills")),
+        first_deaths=_safe_int(row.get("first_deaths")),
+        ct_kills=_safe_int(row.get("ct_kills")),
+        ct_deaths=_safe_int(row.get("ct_deaths")),
+        t_kills=_safe_int(row.get("t_kills")),
+        t_deaths=_safe_int(row.get("t_deaths")),
+        clutches_won=_safe_int(row.get("clutches_won")),
+    )
 
 
 def _player_stat(row: dict[str, Any]) -> ScrapedPlayerMapStats:
@@ -349,6 +390,15 @@ def _safe_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 

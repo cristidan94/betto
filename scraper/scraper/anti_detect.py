@@ -23,12 +23,37 @@ def random_headers() -> dict[str, str]:
     return dict(random.choice(HEADER_SETS))
 
 
+# Substrings that only appear on a Cloudflare interstitial, never on a normally
+# served HLTV page. Note: "/cdn-cgi/challenge-platform" is deliberately NOT here
+# because Cloudflare injects that script reference into successfully served pages
+# too — keying on it would reject every real page.
+CHALLENGE_MARKERS = (
+    "cf-challenge",
+    "checking your browser",
+    "access denied",
+    "rate limited",
+    "just a moment",
+    "enable javascript and cookies",
+    "cf_chl_opt",
+    "__cf_chl",
+    "window._cf_chl",
+    "challenge-error",
+)
+
+
 def is_cloudflare_challenge(status: int, html: str) -> bool:
     if status in {403, 429, 503}:
         return True
+    html = html or ""
+    # A genuine Cloudflare interstitial is a small, content-free page; a real
+    # block that matters is already caught by the status check above. Once a body
+    # is this large it is real HLTV content, and a stray marker substring inside
+    # ad/comment/script text must not flag it as a challenge — that false positive
+    # was discarding fully-rendered /stats/ pages fetched through the unblocker.
+    if len(html) >= 100_000:
+        return False
     lowered = html.lower()
-    markers = ("cf-challenge", "checking your browser", "access denied", "rate limited")
-    return any(marker in lowered for marker in markers)
+    return any(marker in lowered for marker in CHALLENGE_MARKERS)
 
 
 def is_usable_hltv_html(status: int, html: str) -> bool:

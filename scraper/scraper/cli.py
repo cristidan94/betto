@@ -282,6 +282,14 @@ def cmd_test_live(args: argparse.Namespace) -> int:
     return run_live_test()
 
 
+def cmd_enrich_stats(args: argparse.Namespace) -> int:
+    from scraper.enrich import enrich_stats
+
+    result = enrich_stats(load_config(), max_tier=args.max_tier, limit=args.limit, min_delay=args.min_delay)
+    print(json.dumps(result, indent=2))
+    return 0 if "error" not in result else 1
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     config = load_config()
     dest = Path(args.out_dir or "data/hltv_fixtures")
@@ -555,6 +563,12 @@ def main(argv: list[str] | None = None) -> int:
 
     test_live = subparsers.add_parser("test-live")
     test_live.set_defaults(func=cmd_test_live)
+
+    enrich = subparsers.add_parser("enrich-stats")
+    enrich.add_argument("--max-tier", type=int, default=1, help="Only enrich events at this priority tier or better (1=best)")
+    enrich.add_argument("--limit", type=int, default=50, help="Max /stats/ (map) requests to spend this run")
+    enrich.add_argument("--min-delay", type=float, default=2.0, help="Seconds to sleep between unblocker requests")
+    enrich.set_defaults(func=cmd_enrich_stats)
 
     export = subparsers.add_parser("export")
     export.add_argument("--out-dir", default=None)

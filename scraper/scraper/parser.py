@@ -119,7 +119,7 @@ def parse_match_page(html: str, match_id: str) -> dict[str, Any]:
         "team_a": teams[0],
         "team_b": teams[1],
         "event": _event(soup),
-        "players": _players(soup, teams),
+        "players": _players(soup, teams, maps),
         "maps": maps,
         "vetoes": _vetoes(soup, teams),
         "stats_url": _stats_url(soup, teams),
@@ -465,10 +465,23 @@ def _teams(soup) -> tuple[dict[str, str], dict[str, str]]:
     return {"hltv_id": "unknown-a", "name": "Team A"}, {"hltv_id": "unknown-b", "name": "Team B"}
 
 
-def _players(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, str]]:
+def _players(
+    soup,
+    teams: tuple[dict[str, str], dict[str, str]],
+    maps: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
     lineup_players = _lineup_players(soup)
     if lineup_players:
         return lineup_players
+
+    # For finished matches there is no lineup widget, but the embedded scoreboard
+    # gives us the exact roster with correct team assignments — far more accurate
+    # than scraping every /player/ link on the page (which also picks up the
+    # head-to-head and sidebar sections).
+    if maps:
+        from_maps = _players_from_maps(maps)
+        if from_maps:
+            return from_maps
 
     players = []
     seen: set[str] = set()
@@ -485,6 +498,20 @@ def _players(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[st
         if len(players) == 5:
             current_team = teams[1]["hltv_id"]
     return players
+
+
+def _players_from_maps(maps: list[dict[str, Any]]) -> list[dict[str, str]]:
+    seen: dict[str, dict[str, str]] = {}
+    for item in maps:
+        for stat in item.get("player_stats") or []:
+            pid = str(stat.get("player_hltv_id") or "")
+            if pid and pid not in seen:
+                seen[pid] = {
+                    "hltv_id": pid,
+                    "nickname": str(stat.get("nickname") or pid),
+                    "team_hltv_id": str(stat.get("team_hltv_id") or ""),
+                }
+    return list(seen.values())
 
 
 def _lineup_players(soup) -> list[dict[str, str]]:
@@ -511,11 +538,103 @@ def _lineup_players(soup) -> list[dict[str, str]]:
     return players
 
 
+_MAP_NAMES = (
+    "Mirage", "Inferno", "Nuke", "Ancient", "Anubis", "Dust2", "Train",
+    "Vertigo", "Overpass", "Cache", "Cobblestone",
+)
+
+
 def _maps(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, Any]]:
+    holders = soup.select(".mapholder")
+    if holders:
+        maps = _maps_from_holders(holders, teams)
+        if maps:
+            _attach_embedded_player_stats(soup, maps)
+            return maps
+    maps = _maps_from_text(soup, teams)
+    _attach_embedded_player_stats(soup, maps)
+    return maps
+
+
+def _maps_from_holders(holders, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, Any]]:
+    maps: list[dict[str, Any]] = []
+    index = 0
+    for holder in holders:
+        name_el = holder.select_one(".mapname")
+        if not name_el:
+            continue
+        name = name_el.get_text(strip=True)
+        if not name or name.lower() in {"tba", "default", "tbd"}:
+            continue
+        scores = [
+            int(el.get_text(strip=True))
+            for el in holder.select(".results-team-score")
+            if el.get_text(strip=True).isdigit()
+        ]
+        if len(scores) < 2:
+            # Map listed (veto) but not played yet — skip it.
+            continue
+        score_a, score_b = scores[0], scores[1]
+        stats_id = None
+        link = holder.select_one("a[href*='mapstatsid/']")
+        if link:
+            m = re.search(r"mapstatsid/(\d+)", link.get("href") or "")
+            stats_id = m.group(1) if m else None
+        winner = _holder_winner(holder, teams, score_a, score_b)
+        halves = _half_scores_from_holder(holder, score_a, score_b)
+        index += 1
+        maps.append(
+            {
+                "map_index": index,
+                "map_name": name.title() if name.lower() != "dust2" else "Dust2",
+                "team_a_score": score_a,
+                "team_b_score": score_b,
+                "winner_hltv_id": winner,
+                "map_stats_id": stats_id,
+                **halves,
+            }
+        )
+    return maps
+
+
+def _holder_winner(holder, teams: tuple[dict[str, str], dict[str, str]], score_a: int, score_b: int) -> str:
+    left = holder.select_one(".results-left")
+    right = holder.select_one(".results-right")
+    if left is not None and "won" in (left.get("class") or []):
+        return teams[0]["hltv_id"]
+    if right is not None and "won" in (right.get("class") or []):
+        return teams[1]["hltv_id"]
+    return teams[0]["hltv_id"] if score_a > score_b else teams[1]["hltv_id"]
+
+
+def _half_scores_from_holder(holder, total_a: int, total_b: int) -> dict[str, Any]:
+    half_el = holder.select_one(".results-center-half-score")
+    if half_el:
+        pairs = re.findall(r"(\d+)\s*:\s*(\d+)", half_el.get_text(" ", strip=True))
+        if len(pairs) >= 2:
+            h1_a, h1_b = int(pairs[0][0]), int(pairs[0][1])
+            h2_a, h2_b = int(pairs[1][0]), int(pairs[1][1])
+            return {
+                "team_a_first_half": h1_a,
+                "team_b_first_half": h1_b,
+                "team_a_second_half": h2_a,
+                "team_b_second_half": h2_b,
+                "overtime": len(pairs) > 2 or (total_a + total_b) > 30,
+            }
+    return {
+        "team_a_first_half": None,
+        "team_b_first_half": None,
+        "team_a_second_half": None,
+        "team_b_second_half": None,
+        "overtime": (total_a + total_b) > 30,
+    }
+
+
+def _maps_from_text(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, Any]]:
     maps = []
     text = soup.get_text("\n", strip=True)
     map_stats_ids = _soup_map_stats_ids(soup)
-    pattern = re.compile(r"(Mirage|Inferno|Nuke|Ancient|Anubis|Dust2|Train|Vertigo|Overpass|Cache|Cobblestone).*?(\d{1,2})\s*[-:]\s*(\d{1,2})", re.I)
+    pattern = re.compile(r"(" + "|".join(_MAP_NAMES) + r").*?(\d{1,2})\s*[-:]\s*(\d{1,2})", re.I)
     for index, match in enumerate(pattern.finditer(text), start=1):
         score_a, score_b = int(match.group(2)), int(match.group(3))
         after = text[match.end():match.end() + 200]
@@ -532,6 +651,233 @@ def _maps(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, 
             }
         )
     return maps
+
+
+def _attach_embedded_player_stats(soup, maps: list[dict[str, Any]]) -> None:
+    """Attach per-player stats that HLTV embeds in the match page's #matchstats
+    tabs (one tab per map, keyed by map-stats-id). This is the primary source of
+    map player stats and avoids the heavily-challenged /stats/ pages."""
+    if not maps:
+        return
+    embedded = _embedded_map_stats(soup)
+    if not embedded:
+        return
+    for item in maps:
+        stats_id = item.get("map_stats_id")
+        rows = embedded.get(str(stats_id)) if stats_id else None
+        if rows:
+            item["player_stats"] = rows
+    # Best-of-1 pages sometimes only render the aggregate "all" tab.
+    if len(maps) == 1 and not maps[0].get("player_stats") and embedded.get("all"):
+        maps[0]["player_stats"] = embedded["all"]
+
+
+def _embedded_map_stats(soup) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for tab in soup.select("div.stats-content"):
+        tab_id = tab.get("id") or ""
+        m = re.match(r"(\d+|all)-content$", tab_id)
+        if not m:
+            continue
+        key = m.group(1)
+        rows = _player_rows_from_stat_tables(tab.select("table.totalstats"))
+        if rows:
+            # HLTV embeds CT-only and T-only scoreboards alongside the "all"
+            # table (hidden in the page, toggled client-side). Merge their
+            # per-player kill/death splits into the combined rows.
+            by_id = {row["player_hltv_id"]: row for row in rows}
+            _merge_side_kills(tab.select("table.ctstats"), by_id, "ct")
+            _merge_side_kills(tab.select("table.tstats"), by_id, "t")
+            result[key] = rows
+    return result
+
+
+def _merge_side_kills(tables, by_id: dict[str, dict[str, Any]], side: str) -> None:
+    for table in tables:
+        col_map = _stat_column_map(table)
+        kd_index = col_map.get("kd")
+        if kd_index is None:
+            continue
+        for tr in table.select("tr"):
+            player_link = tr.select_one("a[href*='/player/']")
+            if not player_link:
+                continue
+            pm = re.search(r"/player/(\d+)", player_link.get("href") or "")
+            if not pm or pm.group(1) not in by_id:
+                continue
+            cells = [td.get_text(" ", strip=True) for td in tr.select("td")]
+            if kd_index >= len(cells):
+                continue
+            kd = re.search(r"(\d+)\s*-\s*(\d+)", cells[kd_index])
+            if kd:
+                by_id[pm.group(1)][f"{side}_kills"] = int(kd.group(1))
+                by_id[pm.group(1)][f"{side}_deaths"] = int(kd.group(2))
+
+
+def _player_rows_from_stat_tables(tables) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for table in tables:
+        team_id = ""
+        team_link = table.find("a", href=re.compile(r"/team/\d+"))
+        if team_link:
+            tm = re.search(r"/team/(\d+)", team_link.get("href") or "")
+            team_id = tm.group(1) if tm else ""
+        col_map = _stat_column_map(table)
+        for tr in table.select("tr"):
+            player_link = tr.select_one("a[href*='/player/']")
+            if not player_link:
+                continue
+            pm = re.search(r"/player/(\d+)(?:/([^/?#]+))?", player_link.get("href") or "")
+            if not pm:
+                continue
+            cells = [td.get_text(" ", strip=True) for td in tr.select("td")]
+            if len(cells) < 2:
+                continue
+            stat = {
+                "player_hltv_id": pm.group(1),
+                "nickname": pm.group(2) or player_link.get_text(strip=True),
+                "team_hltv_id": team_id,
+            }
+            stat.update(_stat_values_from_cells(cells, col_map))
+            rows.append(stat)
+    return rows
+
+
+def _stat_column_map(table) -> dict[str, int]:
+    header = table.select_one("tr")
+    if not header:
+        return {}
+    labels = [c.get_text(" ", strip=True).lower() for c in header.select("th, td")]
+    columns: dict[str, int] = {}
+    for index, label in enumerate(labels):
+        normalized = label.replace(" ", "")
+        if normalized in {"k-d", "kills-deaths", "kd"}:
+            columns.setdefault("kd", index)
+        elif label.startswith("adr"):
+            columns.setdefault("adr", index)
+        elif label.startswith("kast"):
+            columns.setdefault("kast", index)
+        elif label.startswith("rating"):
+            columns.setdefault("rating", index)
+        elif label.startswith("hs") or "headshot" in label:
+            columns.setdefault("hs", index)
+    return columns
+
+
+def _stat_values_from_cells(cells: list[str], col_map: dict[str, int]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    if "kd" in col_map and col_map["kd"] < len(cells):
+        kd = re.search(r"(\d+)\s*-\s*(\d+)", cells[col_map["kd"]])
+        if kd:
+            values["kills"] = int(kd.group(1))
+            values["deaths"] = int(kd.group(2))
+    for column, field in (("adr", "adr"), ("rating", "rating"), ("kast", "kast_pct"), ("hs", "headshot_pct")):
+        index = col_map.get(column)
+        if index is not None and index < len(cells):
+            number = _first_number(cells[index])
+            if number is not None:
+                values[field] = number
+    return values
+
+
+def _first_number(text: str) -> float | None:
+    match = re.search(r"-?\d+(?:\.\d+)?", str(text))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def parse_stats_map_detailed(html: str) -> list[dict[str, Any]]:
+    """Parse the detailed /stats/ map page (fetched via the unblocker).
+
+    Returns one row per player with the granular fields HLTV only exposes here:
+    opening duels, multi-kills, clutches, headshot kills, flash assists, and
+    trade deaths. Rows are matched back to fixtures by nickname (the rendered
+    table has no /player/ links)."""
+    if BeautifulSoup is None:
+        return []
+    soup = _soup(html)
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for table in soup.select("table.stats-table.totalstats, table.stats-table"):
+        if "ctstats" in (table.get("class") or []) or "tstats" in (table.get("class") or []):
+            continue
+        labels = [c.get_text(" ", strip=True).lower() for c in (table.select("tr")[0].select("th, td") if table.select("tr") else [])]
+        col = _detailed_columns(labels)
+        if "kills" not in col and "rating" not in col:
+            continue
+        for tr in table.select("tr")[1:]:
+            cells = [td.get_text(" ", strip=True) for td in tr.select("td")]
+            if len(cells) < 3:
+                continue
+            nickname = cells[0].strip()
+            if not nickname or nickname.lower() in seen:
+                continue
+            seen.add(nickname.lower())
+            rows.append(_detailed_row(nickname, cells, col))
+    return rows
+
+
+def _detailed_columns(labels: list[str]) -> dict[str, int]:
+    col: dict[str, int] = {}
+    for i, label in enumerate(labels):
+        norm = label.replace(" ", "")
+        if norm.startswith("op.k") and "ek" not in norm:
+            col.setdefault("opening", i)
+        elif norm == "mks":
+            col.setdefault("mks", i)
+        elif norm == "1vsx":
+            col.setdefault("clutches", i)
+        elif norm.startswith("k(hs") or norm == "k(hs)":
+            col.setdefault("kills", i)
+        elif norm.startswith("a(f"):
+            col.setdefault("assists", i)
+        elif norm.startswith("d(t"):
+            col.setdefault("deaths", i)
+        elif label.startswith("adr"):
+            col.setdefault("adr", i)
+        elif label.startswith("kast"):
+            col.setdefault("kast", i)
+        elif label.startswith("rating"):
+            col.setdefault("rating", i)
+    return col
+
+
+def _detailed_row(nickname: str, cells: list[str], col: dict[str, int]) -> dict[str, Any]:
+    row: dict[str, Any] = {"nickname": nickname}
+
+    def cell(key: str) -> str | None:
+        i = col.get(key)
+        return cells[i] if i is not None and i < len(cells) else None
+
+    opening = cell("opening")
+    if opening:
+        m = re.search(r"(\d+)\s*:\s*(\d+)", opening)
+        if m:
+            row["first_kills"], row["first_deaths"] = int(m.group(1)), int(m.group(2))
+    # "K (hs)" -> kills (headshot kills); same shape for assists/deaths.
+    for key, base, paren in (("kills", "kills", "hs_kills"), ("assists", "assists", "flash_assists"), ("deaths", "deaths", "trade_deaths")):
+        text = cell(key)
+        if text:
+            m = re.search(r"(\d+)\s*(?:\((\d+)\))?", text)
+            if m:
+                row[base] = int(m.group(1))
+                if m.group(2) is not None:
+                    row[paren] = int(m.group(2))
+    for key, field in (("mks", "multi_kills"), ("clutches", "clutches_won")):
+        n = _first_number(cell(key) or "")
+        if n is not None:
+            row[field] = int(n)
+    for key, field in (("adr", "adr"), ("kast", "kast_pct"), ("rating", "rating")):
+        n = _first_number(cell(key) or "")
+        if n is not None:
+            row[field] = n
+    if row.get("kills") and row.get("hs_kills") is not None:
+        row["headshot_pct"] = round(100.0 * row["hs_kills"] / row["kills"], 1)
+    return row
 
 
 def _parse_half_scores(text: str, total_a: int, total_b: int) -> dict[str, Any]:
