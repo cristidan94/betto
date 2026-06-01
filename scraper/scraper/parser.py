@@ -914,17 +914,71 @@ def _soup_map_stats_ids(soup) -> list[str]:
     return ids
 
 
+_VETO_MAP_RE = re.compile(
+    r"(Mirage|Inferno|Nuke|Ancient|Anubis|Dust2|Train|Vertigo|Overpass|Cache|Cobblestone)",
+    re.I,
+)
+_VETO_LINE_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
+
+
 def _vetoes(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, Any]]:
+    """Parse the standard HLTV veto box.
+
+    The veto box renders one numbered ``<div>`` per step inside
+    ``div.veto-box > div.padding``, e.g. ``1. Entropiq removed Inferno`` and a
+    final ``7. Mirage was left over`` decider. We parse those lines directly so
+    order_idx, team, and action map to the real sequence. If no numbered box is
+    present (e.g. condensed test markup) we fall back to a loose text scan.
+    """
+    vetoes = _vetoes_from_box(soup, teams)
+    return vetoes if vetoes else _vetoes_loose(soup, teams)
+
+
+def _vetoes_from_box(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, Any]]:
+    vetoes: list[dict[str, Any]] = []
+    for box in soup.select(".veto-box"):
+        for line in box.select(".padding > div"):
+            text = line.get_text(" ", strip=True)
+            line_match = _VETO_LINE_RE.match(text)
+            if not line_match:
+                continue
+            map_match = _VETO_MAP_RE.search(line_match.group(2))
+            if not map_match:
+                continue
+            order_idx = int(line_match.group(1))
+            body = line_match.group(2)
+            low = body.lower()
+            if "left over" in low or "leftover" in low:
+                action, team_id = "decider", None
+            else:
+                action = "pick" if "pick" in low else "ban"
+                team_id = _veto_team(body, teams)
+            vetoes.append(
+                {"order_idx": order_idx, "team_hltv_id": team_id, "action": action, "map_name": _canonical_map(map_match.group(1))}
+            )
+    return vetoes
+
+
+def _veto_team(body: str, teams: tuple[dict[str, str], dict[str, str]]) -> str | None:
+    low = body.lower()
+    for team in teams:
+        if low.startswith(team["name"].lower()):
+            return team["hltv_id"]
+    for team in teams:
+        if team["name"].lower() in low:
+            return team["hltv_id"]
+    return None
+
+
+def _vetoes_loose(soup, teams: tuple[dict[str, str], dict[str, str]]) -> list[dict[str, Any]]:
     vetoes = []
     for index, item in enumerate(soup.find_all(string=re.compile(r"\b(removed|picked|ban|pick)\b", re.I)), start=1):
         text = str(item)
-        map_match = re.search(r"(Mirage|Inferno|Nuke|Ancient|Anubis|Dust2|Train|Vertigo|Overpass|Cache|Cobblestone)", text, re.I)
+        map_match = _VETO_MAP_RE.search(text)
         action = "pick" if re.search(r"picked|pick", text, re.I) else "ban"
         if map_match:
-            team_id = teams[0]["hltv_id"] if teams[0]["name"].lower() in text.lower() else None
-            if team_id is None and teams[1]["name"].lower() in text.lower():
-                team_id = teams[1]["hltv_id"]
-            vetoes.append({"order_idx": index, "team_hltv_id": team_id, "action": action, "map_name": map_match.group(1)})
+            team_id = _veto_team(text, teams)
+            vetoes.append({"order_idx": index, "team_hltv_id": team_id, "action": action, "map_name": _canonical_map(map_match.group(1))})
     return vetoes
 
 

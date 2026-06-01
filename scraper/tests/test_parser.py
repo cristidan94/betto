@@ -117,6 +117,32 @@ class ParserTests(unittest.TestCase):
         self.assertGreaterEqual(len(match["players"]), 3)
         self.assertGreaterEqual(len(match["vetoes"]), 1)
 
+    def test_parse_match_page_parses_numbered_veto_box(self) -> None:
+        html = """
+        <html><body>
+          <a href="/team/5973/liquid">Liquid</a>
+          <a href="/team/10831/entropiq">Entropiq</a>
+          <div class="standard-box veto-box"><div class="padding">* Group D</div></div>
+          <div class="standard-box veto-box"><div class="padding">
+            <div>1. Entropiq removed Inferno</div>
+            <div>2. Liquid removed Ancient</div>
+            <div>3. Entropiq picked Vertigo</div>
+            <div>4. Liquid picked Overpass</div>
+            <div>5. Entropiq removed Nuke</div>
+            <div>6. Liquid removed Dust2</div>
+            <div>7. Mirage was left over</div>
+          </div></div>
+        </body></html>
+        """
+        vetoes = parse_match_page(html, "2350370")["vetoes"]
+
+        # Exactly the 7 numbered steps, no stray/duplicate entries from a page scan.
+        self.assertEqual([v["order_idx"] for v in vetoes], [1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual(vetoes[0], {"order_idx": 1, "team_hltv_id": "10831", "action": "ban", "map_name": "Inferno"})
+        self.assertEqual(vetoes[2], {"order_idx": 3, "team_hltv_id": "10831", "action": "pick", "map_name": "Vertigo"})
+        # Map names are canonicalized and the leftover map is the decider with no team.
+        self.assertEqual(vetoes[6], {"order_idx": 7, "team_hltv_id": None, "action": "decider", "map_name": "Mirage"})
+
     def test_parse_match_page_ignores_unrelated_stats_links(self) -> None:
         html = """
         <html><body>
