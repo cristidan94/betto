@@ -415,8 +415,8 @@ def _fallback_event(html: str) -> dict[str, Any]:
     for href, text, _ in _anchors(html):
         match = re.search(r"/events/(\d+)", href)
         if match:
-            return {"hltv_id": match.group(1), "name": text, "stars": None}
-    return {"hltv_id": "unknown", "name": "Unknown Event", "stars": None}
+            return {"hltv_id": match.group(1), "name": text, "stars": _stars_from_context(html)}
+    return {"hltv_id": "unknown", "name": "Unknown Event", "stars": _stars_from_context(html)}
 
 
 def _fallback_datetime(html: str) -> datetime:

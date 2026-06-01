@@ -365,5 +365,53 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(params, ("strategy-1", 9))
 
 
+class ContestUpsertTests(unittest.TestCase):
+    def test_upsert_contest_includes_match_stage_and_head_to_head(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+        contest = Contest(
+            contest_id="cs:contest:hltv:2394722",
+            game_id="counter_strike",
+            competition_id="cs:competition:hltv:9171",
+            starts_at=datetime(2026, 5, 29, 17, 0, tzinfo=timezone.utc),
+            participant_a_id="cs:participant:hltv:13644",
+            participant_b_id="cs:participant:hltv:13403",
+            format="bo3",
+            status="finished",
+            match_stage="Round of 16",
+            head_to_head={"team_a_wins": 3, "team_b_wins": 2},
+        )
+
+        repo.upsert_contest(contest)
+
+        self.assertEqual(len(db.calls), 1)
+        sql, params = db.calls[0]
+        self.assertIn("match_stage", sql)
+        self.assertIn("head_to_head", sql)
+        self.assertIn("Round of 16", params)
+        self.assertIn('{"team_a_wins": 3, "team_b_wins": 2}', params)
+
+    def test_upsert_contest_defaults_to_none(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+        contest = Contest(
+            contest_id="c1",
+            game_id="cs",
+            competition_id=None,
+            starts_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            participant_a_id="a",
+            participant_b_id="b",
+            format="bo1",
+            status="finished",
+        )
+
+        repo.upsert_contest(contest)
+
+        sql, params = db.calls[0]
+        self.assertIn("match_stage", sql)
+        self.assertIsNone(params[-2])
+        self.assertIsNone(params[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

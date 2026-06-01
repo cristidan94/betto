@@ -50,7 +50,6 @@ class ScrapedPlayerMapStats:
     t_kills: int | None = None
     t_deaths: int | None = None
     clutches_won: int | None = None
-    # Detailed fields available only from the /stats/ map page (via unblocker).
     hs_kills: int | None = None
     multi_kills: int | None = None
     flash_assists: int | None = None
@@ -127,6 +126,7 @@ def match_to_fixture_json(match: ScrapedMatch) -> dict[str, Any]:
                 "team_a_score": m.team_a_score,
                 "team_b_score": m.team_b_score,
                 "winner_hltv_id": m.winner_hltv_id,
+                "map_stats_id": m.map_stats_id,
                 "team_a_first_half": m.team_a_first_half,
                 "team_b_first_half": m.team_b_first_half,
                 "team_a_second_half": m.team_a_second_half,

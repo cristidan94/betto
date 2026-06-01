@@ -273,6 +273,7 @@ def parse_cs_fixture(args: argparse.Namespace) -> int:
 def db_ingest_cs_fixture(args: argparse.Namespace) -> int:
     from core.ingestion import FetchResult
     from sports.cs.normalization import normalize_match, parse_hltv_fixture
+    from sports.cs.normalization.ids import cs_participant_id
     from sports.cs.repository import CsRepository
 
     settings = load_settings()
@@ -304,6 +305,11 @@ def db_ingest_cs_fixture(args: argparse.Namespace) -> int:
                 repo.upsert_contest_unit(unit)
             for unit, parsed_map in zip(contest_units, normalized["cs_maps"], strict=True):  # type: ignore[arg-type]
                 cs_repo.upsert_map_result(unit.unit_id, parsed_map)
+                for player_stat in parsed_map.player_stats:
+                    player_id = cs_participant_id("hltv", player_stat.player_hltv_id)
+                    team_id = cs_participant_id("hltv", player_stat.team_hltv_id)
+                    cs_repo.upsert_map_lineup(unit.unit_id, team_id, player_id)
+                    cs_repo.upsert_player_map_stats(unit.unit_id, player_stat)
             contest_id = normalized["contest"].contest_id  # type: ignore[union-attr]
             for veto in normalized["cs_vetoes"]:  # type: ignore[union-attr]
                 cs_repo.upsert_veto_action(contest_id, veto)
@@ -322,11 +328,140 @@ def db_ingest_cs_fixture(args: argparse.Namespace) -> int:
                 "contest_units_upserted": len(normalized["contest_units"]),  # type: ignore[arg-type]
                 "map_results_upserted": len(normalized["cs_maps"]),  # type: ignore[arg-type]
                 "vetoes_upserted": len(normalized["cs_vetoes"]),  # type: ignore[arg-type]
+                "lineups_upserted": sum(len(parsed_map.player_stats) for parsed_map in normalized["cs_maps"]),  # type: ignore[union-attr]
+                "player_stats_upserted": sum(len(parsed_map.player_stats) for parsed_map in normalized["cs_maps"]),  # type: ignore[union-attr]
             },
             indent=2,
             sort_keys=True,
         )
     )
+    return 0
+
+
+def db_ingest_hltv_scraped(args: argparse.Namespace) -> int:
+    from core.ingestion import FetchResult
+    from sports.cs.normalization import normalize_match, parse_hltv_payload
+    from sports.cs.normalization.ids import cs_participant_id
+    from sports.cs.repository import CsRepository
+
+    settings = load_settings()
+    store = LocalRawStore(settings.raw_store_dir)
+
+    scraped_dir = Path(args.scraped_dir)
+    if not scraped_dir.is_absolute():
+        scraped_dir = settings.project_root / scraped_dir
+    scraped_dir = scraped_dir.resolve()
+
+    fixture_paths = sorted(scraped_dir.glob("*.json"))
+    if not fixture_paths:
+        return print_error("no_fixtures", f"No JSON files found in {scraped_dir}")
+
+    results: dict[str, object] = {
+        "fixtures_found": len(fixture_paths),
+        "ingested": 0,
+        "skipped": 0,
+        "failed": 0,
+        "participants_upserted": 0,
+        "contest_units_upserted": 0,
+        "map_results_upserted": 0,
+        "vetoes_upserted": 0,
+        "lineups_upserted": 0,
+        "player_stats_upserted": 0,
+        "errors": [],
+    }
+
+    try:
+        with PostgresExecutor(settings.database_url) as db:
+            repo = PostgresRepository(db)
+            cs_repo = CsRepository(db)
+
+            existing: set[str] = set()
+            if not args.force:
+                rows = db.execute(
+                    "SELECT source_id FROM raw_objects WHERE source = %s",
+                    ("hltv-scraper",),
+                )
+                existing = {str(row[0]).removeprefix("scraper-") for row in (rows or [])}
+
+            for index, path in enumerate(fixture_paths):
+                hltv_id = path.stem
+                if hltv_id in existing:
+                    results["skipped"] += 1  # type: ignore[operator]
+                    continue
+
+                savepoint = f"hltv_scraped_fixture_{index}"
+                db.execute(f"SAVEPOINT {savepoint}", ())
+                try:
+                    file_bytes = path.read_bytes()
+                    payload = json.loads(file_bytes.decode("utf-8"))
+                    parsed = parse_hltv_payload(payload)
+                    normalized = normalize_match(parsed)
+                    fixture_counts = {
+                        "participants_upserted": 0,
+                        "contest_units_upserted": 0,
+                        "map_results_upserted": 0,
+                        "vetoes_upserted": 0,
+                        "lineups_upserted": 0,
+                        "player_stats_upserted": 0,
+                    }
+
+                    for participant in normalized["participants"]:  # type: ignore[union-attr]
+                        repo.upsert_participant(participant)
+                        fixture_counts["participants_upserted"] += 1
+
+                    repo.upsert_competition(normalized["competition"])  # type: ignore[arg-type]
+                    repo.upsert_contest(normalized["contest"])  # type: ignore[arg-type]
+
+                    contest_units = normalized["contest_units"]  # type: ignore[assignment]
+                    for unit in contest_units:
+                        repo.upsert_contest_unit(unit)
+                        fixture_counts["contest_units_upserted"] += 1
+
+                    contest_id = normalized["contest"].contest_id  # type: ignore[union-attr]
+                    for veto in normalized["cs_vetoes"]:  # type: ignore[union-attr]
+                        cs_repo.upsert_veto_action(contest_id, veto)
+                        fixture_counts["vetoes_upserted"] += 1
+
+                    for unit, parsed_map in zip(contest_units, normalized["cs_maps"], strict=True):  # type: ignore[arg-type]
+                        cs_repo.upsert_map_result(unit.unit_id, parsed_map)
+                        fixture_counts["map_results_upserted"] += 1
+                        for player_stat in parsed_map.player_stats:
+                            player_id = cs_participant_id("hltv", player_stat.player_hltv_id)
+                            team_id = cs_participant_id("hltv", player_stat.team_hltv_id)
+                            cs_repo.upsert_map_lineup(unit.unit_id, team_id, player_id)
+                            fixture_counts["lineups_upserted"] += 1
+                            cs_repo.upsert_player_map_stats(unit.unit_id, player_stat)
+                            fixture_counts["player_stats_upserted"] += 1
+
+                    raw_obj = store.put(
+                        FetchResult(
+                            source="hltv-scraper",
+                            source_id=f"scraper-{hltv_id}",
+                            url=str(path),
+                            content=file_bytes,
+                            content_type="application/json",
+                            fetched_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    repo.upsert_raw_object(raw_obj)
+
+                    db.execute(f"RELEASE SAVEPOINT {savepoint}", ())
+                    for key, value in fixture_counts.items():
+                        results[key] += value  # type: ignore[operator]
+                    existing.add(hltv_id)
+                    results["ingested"] += 1  # type: ignore[operator]
+                except Exception as exc:
+                    db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}", ())
+                    db.execute(f"RELEASE SAVEPOINT {savepoint}", ())
+                    results["failed"] += 1  # type: ignore[operator]
+                    results["errors"].append({"file": path.name, "error": str(exc)})  # type: ignore[union-attr]
+
+    except MissingPostgresDriverError as exc:
+        return print_error("missing_postgres_driver", str(exc))
+    except Exception as exc:
+        return print_error("db_ingest_hltv_scraped_failed", str(exc))
+
+    print(json.dumps(results, indent=2, sort_keys=True, default=str))
     return 0
 
 
@@ -1764,6 +1899,11 @@ def main(argv: list[str] | None = None) -> int:
     hltv_scraped_parser.add_argument("--raw-dir", default="data/hltv_scraped")
     hltv_scraped_parser.add_argument("--out-dir", default="data/hltv_fixtures")
     hltv_scraped_parser.set_defaults(func=convert_hltv_scraped)
+
+    db_ingest_scraped_parser = subparsers.add_parser("db-ingest-hltv-scraped")
+    db_ingest_scraped_parser.add_argument("--scraped-dir", default="data/hltv_scraped")
+    db_ingest_scraped_parser.add_argument("--force", action="store_true", help="Re-ingest already imported matches")
+    db_ingest_scraped_parser.set_defaults(func=db_ingest_hltv_scraped)
 
     rolling_stats_parser = subparsers.add_parser("convert-cs-rolling-stats")
     rolling_stats_parser.add_argument("--path", required=True)

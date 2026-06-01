@@ -56,6 +56,8 @@ class ModelTests(unittest.TestCase):
                             t_kills=11,
                             t_deaths=9,
                             clutches_won=1,
+                            flash_assists=3,
+                            trade_deaths=2,
                         ),
                     ),
                 ),
@@ -70,11 +72,13 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(payload["source"]["name"], "hltv-scraper")
         self.assertEqual(payload["event"]["tier"], 1)
         self.assertEqual(payload["event"]["hltv_stars"], 5)
-        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["kills"], 25)
-        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["ct_kills"], 14)
-        # map_stats_id must round-trip into the fixture: enrich-stats relies on it
-        # to build the /stats/ URL, so dropping it silently disables enrichment.
         self.assertEqual(payload["maps"][0]["map_stats_id"], "555")
+        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["kills"], 25)
+        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["first_deaths"], 2)
+        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["ct_kills"], 14)
+        self.assertEqual(payload["maps"][0]["map_stats_id"], "555")
+        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["flash_assists"], 3)
+        self.assertEqual(payload["maps"][0]["player_stats"]["ace"]["trade_deaths"], 2)
 
     def test_write_fixture_json(self) -> None:
         match = ScrapedMatch(

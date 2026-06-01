@@ -102,12 +102,15 @@ class PostgresRepository:
     def upsert_contest(self, contest: Contest) -> None:
         self.db.execute(
             """
-            INSERT INTO contests (contest_id, game_id, competition_id, starts_at, participant_a_id, participant_b_id, format, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO contests
+              (contest_id, game_id, competition_id, starts_at, participant_a_id, participant_b_id, format, status, match_stage, head_to_head)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             ON CONFLICT (contest_id) DO UPDATE SET
               starts_at = EXCLUDED.starts_at,
               format = EXCLUDED.format,
-              status = EXCLUDED.status
+              status = EXCLUDED.status,
+              match_stage = EXCLUDED.match_stage,
+              head_to_head = EXCLUDED.head_to_head
             """,
             (
                 contest.contest_id,
@@ -118,6 +121,8 @@ class PostgresRepository:
                 contest.participant_b_id,
                 contest.format,
                 contest.status,
+                contest.match_stage,
+                json.dumps(contest.head_to_head) if contest.head_to_head is not None else None,
             ),
         )
 

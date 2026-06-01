@@ -1,0 +1,116 @@
+{
+  "hltv_id": "2394722",
+  "schema_version": "hltv-fixture-v1",
+  "source": {
+    "name": "hltv-scraper",
+    "url": "https://example.com",
+    "stats_url": "https://example.com/stats"
+  },
+  "status": "finished",
+  "best_of": 3,
+  "match_stage": "Round of 16",
+  "scheduled_at": "2026-05-29T17:00:00+00:00",
+  "event": {
+    "hltv_id": "9171",
+    "name": "Thunderpick World Championship",
+    "tier": 2,
+    "hltv_stars": 0
+  },
+  "team_a": {
+    "hltv_id": "13644",
+    "name": "TDK"
+  },
+  "team_b": {
+    "hltv_id": "13403",
+    "name": "TNC"
+  },
+  "head_to_head": {
+    "team_a_wins": 3,
+    "team_b_wins": 2
+  },
+  "players": [
+    {
+      "hltv_id": "16555",
+      "nickname": "Ax1Le",
+      "team_hltv_id": "13644"
+    },
+    {
+      "hltv_id": "20312",
+      "nickname": "deko",
+      "team_hltv_id": "13403"
+    }
+  ],
+  "vetoes": [
+    {
+      "order_idx": 1,
+      "action": "ban",
+      "map_name": "Nuke",
+      "team_hltv_id": "13644"
+    },
+    {
+      "order_idx": 2,
+      "action": "pick",
+      "map_name": "Dust2",
+      "team_hltv_id": "13403"
+    },
+    {
+      "order_idx": 3,
+      "action": "decider",
+      "map_name": "Mirage",
+      "team_hltv_id": null
+    }
+  ],
+  "maps": [
+    {
+      "map_index": 1,
+      "map_name": "Dust2",
+      "map_stats_id": "230451",
+      "overtime": false,
+      "winner_hltv_id": "13644",
+      "team_a_score": 13,
+      "team_a_first_half": 7,
+      "team_a_second_half": 6,
+      "team_b_score": 6,
+      "team_b_first_half": 5,
+      "team_b_second_half": 1,
+      "player_stats": {
+        "ax1le": {
+          "kills": 19,
+          "deaths": 10,
+          "adr": 94.6,
+          "rating": 1.77,
+          "kast_pct": 84.2,
+          "ct_kills": 9,
+          "ct_deaths": 3,
+          "t_kills": 10,
+          "t_deaths": 7,
+          "assists": null,
+          "headshot_pct": null,
+          "first_kills": null,
+          "first_deaths": null,
+          "clutches_won": null,
+          "flash_assists": null,
+          "trade_deaths": null
+        },
+        "deko": {
+          "kills": 8,
+          "deaths": 15,
+          "adr": 55.3,
+          "rating": 0.72,
+          "kast_pct": 63.2,
+          "ct_kills": 4,
+          "ct_deaths": 8,
+          "t_kills": 4,
+          "t_deaths": 7,
+          "assists": 3,
+          "headshot_pct": 50.0,
+          "first_kills": 1,
+          "first_deaths": 2,
+          "clutches_won": 0,
+          "flash_assists": 2,
+          "trade_deaths": 1
+        }
+      }
+    }
+  ]
+}

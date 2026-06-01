@@ -188,6 +188,7 @@ class FetcherMatchScraperTests(unittest.TestCase):
         self.assertEqual(row["parsed"], 1)
         self.assertEqual(row["final"], 1)
         self.assertEqual(payload["event"]["tier"], 1)
+        self.assertEqual(payload["maps"][0]["map_stats_id"], "98765")
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["kills"], 25)
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["deaths"], 18)
         self.assertEqual(payload["maps"][0]["player_stats"]["s1mple"]["assists"], 5)

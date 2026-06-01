@@ -41,6 +41,8 @@ class Contest:
     participant_b_id: str
     format: str
     status: str
+    match_stage: str | None = None
+    head_to_head: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)

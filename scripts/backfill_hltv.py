@@ -27,6 +27,7 @@ from core.ingestion import FetchResult
 from core.raw_store import LocalRawStore
 from sports.cs.features import materialize_map_win_rate_90d
 from sports.cs.normalization import normalize_match, parse_hltv_fixture
+from sports.cs.normalization.ids import cs_participant_id
 from sports.cs.normalization.records import CsParsedMatch
 from sports.cs.repository import CsRepository
 
@@ -48,6 +49,8 @@ def backfill(corpus_dir: Path, dry_run: bool = False) -> dict:
         "contest_units_upserted": 0,
         "map_results_upserted": 0,
         "vetoes_upserted": 0,
+        "lineups_upserted": 0,
+        "player_stats_upserted": 0,
         "features_materialized": 0,
     }
 
@@ -61,6 +64,9 @@ def backfill(corpus_dir: Path, dry_run: bool = False) -> dict:
             results["contest_units_upserted"] += len(normalized["contest_units"])
             results["map_results_upserted"] += len(normalized["cs_maps"])
             results["vetoes_upserted"] += len(normalized["cs_vetoes"])
+            player_stats_count = sum(len(parsed_map.player_stats) for parsed_map in normalized["cs_maps"])
+            results["lineups_upserted"] += player_stats_count
+            results["player_stats_upserted"] += player_stats_count
         features = materialize_map_win_rate_90d(
             parsed_matches,
             parsed_matches[-1].scheduled_at,
@@ -105,6 +111,13 @@ def backfill(corpus_dir: Path, dry_run: bool = False) -> dict:
             for unit, parsed_map in zip(contest_units, normalized["cs_maps"], strict=True):
                 cs_repo.upsert_map_result(unit.unit_id, parsed_map)
                 results["map_results_upserted"] += 1
+                for player_stat in parsed_map.player_stats:
+                    player_id = cs_participant_id("hltv", player_stat.player_hltv_id)
+                    team_id = cs_participant_id("hltv", player_stat.team_hltv_id)
+                    cs_repo.upsert_map_lineup(unit.unit_id, team_id, player_id)
+                    results["lineups_upserted"] += 1
+                    cs_repo.upsert_player_map_stats(unit.unit_id, player_stat)
+                    results["player_stats_upserted"] += 1
 
             contest_id = normalized["contest"].contest_id
             for veto in normalized["cs_vetoes"]:
