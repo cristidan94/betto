@@ -31,6 +31,9 @@ def discover_page(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfig, p
         limiter.sleep()
     result = fetcher.fetch(f"https://www.hltv.org/results?offset={offset}")
     if not result.ok:
+        if result.fetcher_type == "rate_limiter":
+            _logger.info("discover page %d skipped: daily cap reached", page)
+            return {"ok": False, "skipped": True, "page": page, "entries": 0, "allowed": 0, "discovered": 0}
         _logger.warning("discover page %d failed: status=%d", page, result.status)
         return {"ok": False, "page": page, "entries": 0, "allowed": 0, "discovered": 0}
     entries = parse_results_page(result.html)
@@ -69,6 +72,9 @@ def discover_upcoming(fetcher: HltvFetcher, db: TrackingDB, config: ScraperConfi
         limiter.sleep()
     result = fetcher.fetch("https://www.hltv.org/matches")
     if not result.ok:
+        if result.fetcher_type == "rate_limiter":
+            _logger.info("discover upcoming skipped: daily cap reached")
+            return {"ok": False, "skipped": True, "entries": 0, "allowed": 0, "discovered": 0, "live": 0}
         _logger.warning("discover upcoming failed: status=%d", result.status)
         return {"ok": False, "entries": 0, "allowed": 0, "discovered": 0, "live": 0}
     entries = parse_upcoming_page(result.html)

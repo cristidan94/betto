@@ -1091,15 +1091,26 @@ def _slugify_team(name: str) -> str:
 
 def _nearby_event(link) -> str | None:
     parent = link.find_parent()
-    return parent.get_text(" ", strip=True)[:120] if parent else None
+    if not parent:
+        return None
+    text = parent.get_text(" ", strip=True)
+    # A real event name is short and single-line. When the link is not inside a
+    # clean result-con (e.g. featured/news blocks), the parent text is a long
+    # concatenated blob of sidebar headlines — reject it rather than store junk.
+    if not text or len(text) > 80:
+        return None
+    return text
 
 
 def _result_event_name(link) -> str | None:
     title = link.get("title")
     if title:
         return str(title).strip()
-    parent = link.find_parent()
-    event = parent.select_one(".event-name, .eventName, .matchEventName") if parent else None
+    # The match link is nested a few levels below the enclosing .result-con,
+    # which carries the .event-name node; search the ancestor, not just the
+    # immediate parent.
+    con = link.find_parent(class_="result-con") or link.find_parent()
+    event = con.select_one(".event-name, .eventName, .matchEventName") if con else None
     if event:
         return event.get_text(" ", strip=True)
     return _nearby_event(link)
@@ -1117,9 +1128,16 @@ def _result_stars(link) -> int | None:
 
 def _result_datetime(link) -> str | None:
     node = link.select_one("[data-unix]")
-    if not node or not node.get("data-unix"):
+    unix = node.get("data-unix") if node else None
+    if not unix:
+        # HLTV results/upcoming pages store the timestamp (ms) as
+        # data-zonedgrouping-entry-unix on the enclosing .result-con, not as a
+        # data-unix descendant of the link.
+        con = link.find_parent(attrs={"data-zonedgrouping-entry-unix": True})
+        unix = con.get("data-zonedgrouping-entry-unix") if con else None
+    if not unix:
         return None
-    value = float(node.get("data-unix"))
+    value = float(unix)
     if value > 10_000_000_000:
         value /= 1000
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()

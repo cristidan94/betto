@@ -190,6 +190,43 @@ class ParserTests(unittest.TestCase):
         self.assertIn("event_name", entries[0])
         self.assertTrue(entries[0]["match_id"].isdigit())
         self.assertGreater(len(entries[0]["event_name"]), 0)
+        # Event names come from the .event-name node, not a scooped sidebar blob.
+        self.assertLessEqual(len(entries[0]["event_name"]), 80)
+        # scheduled_at is read from data-zonedgrouping-entry-unix on .result-con;
+        # the live results page has no data-unix descendants, so this regresses
+        # to None if that selector breaks.
+        dated = [e for e in entries if e.get("scheduled_at")]
+        self.assertGreater(len(dated), 0)
+        self.assertTrue(dated[0]["scheduled_at"].startswith("20"))
+
+    def test_parse_results_page_reads_zonedgrouping_date_and_rejects_junk(self) -> None:
+        # The live results page nests the match link inside a .result-con that
+        # carries the timestamp as data-zonedgrouping-entry-unix (ms) and the
+        # event in a .event-name child — there are no [data-unix] descendants.
+        html = """
+        <html><body>
+          <div class="results-sublist">
+            <div class="result-con" data-zonedgrouping-entry-unix="1780166912000">
+              <a class="a-reset" href="/matches/2394322/magic-vs-nip">
+                <div class="event"><span class="event-name">Stake Ranked Episode 2</span></div>
+              </a>
+            </div>
+          </div>
+          <div class="newsline">FaZe vs NAVI 177 Infographic plus a very long
+            concatenated sidebar headline blob that runs well past eighty chars
+            <a class="a-reset" href="/matches/2399999/foo-vs-bar">match</a>
+          </div>
+        </body></html>
+        """
+        by_id = {e["match_id"]: e for e in parse_results_page(html)}
+
+        good = by_id["2394322"]
+        self.assertEqual(good["event_name"], "Stake Ranked Episode 2")
+        self.assertEqual(good["scheduled_at"], "2026-05-30T18:48:32+00:00")
+
+        # A link outside a clean .result-con must not absorb sidebar text as the
+        # event name (the old _nearby_event blob bug).
+        self.assertIsNone(by_id["2399999"]["event_name"])
 
 
 if __name__ == "__main__":
