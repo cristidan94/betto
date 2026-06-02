@@ -1,11 +1,13 @@
-import { ConsoleShell, type Screen } from '../components/ConsoleShell'
+import { useState } from 'react'
+import { runIngestionJob } from '../api'
+import { ConsoleShell, type ScreenProps } from '../components/ConsoleShell'
 import { Spark, Status } from '../components/primitives'
 import { useApi } from '../hooks/useApi'
-import type { FeatureFreshness, IngestionResponse, IngestionSource } from '../types/ingestion'
+import type { FeatureFreshness, IngestionAction, IngestionJobResponse, IngestionResponse, IngestionSource } from '../types/ingestion'
 
-function IngestionState({ children, onNavigate, tone = 'muted' }: { children: string; onNavigate: (s: Screen) => void; tone?: 'muted' | 'neg' }) {
+function IngestionState({ children, onNavigate, mode, onModeChange, tone = 'muted' }: ScreenProps & { children: string; tone?: 'muted' | 'neg' }) {
   return (
-    <ConsoleShell active="ingest" onNavigate={onNavigate}>
+    <ConsoleShell active="ingest" onNavigate={onNavigate} mode={mode} onModeChange={onModeChange}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
         <span className={tone === 'neg' ? 'c-neg' : 'c-muted'}>{children}</span>
       </div>
@@ -19,19 +21,76 @@ function sourceChipClass(kind: string) {
   return 'chip pos'
 }
 
-export default function Ingestion({ onNavigate }: { onNavigate: (s: Screen) => void }) {
-  const { data, loading, error } = useApi<IngestionResponse>('/ingestion')
+export default function Ingestion({ onNavigate, mode, onModeChange }: ScreenProps) {
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [runningAction, setRunningAction] = useState<IngestionAction | null>(null)
+  const [jobResult, setJobResult] = useState<IngestionJobResponse | null>(null)
+  const [jobError, setJobError] = useState<string | null>(null)
+  const { data, loading, error } = useApi<IngestionResponse>(`/ingestion?refresh=${refreshKey}`)
+  const shellProps = { mode, onModeChange }
 
-  if (loading) return <IngestionState onNavigate={onNavigate}>Loading...</IngestionState>
-  if (error || !data) return <IngestionState onNavigate={onNavigate} tone="neg">{error ?? 'Failed to load'}</IngestionState>
+  if (loading) return <IngestionState onNavigate={onNavigate} {...shellProps}>Loading...</IngestionState>
+  if (error || !data) return <IngestionState onNavigate={onNavigate} {...shellProps} tone="neg">{error ?? 'Failed to load'}</IngestionState>
 
   const sources = data.sources
   const features = data.features
   const warning = sources.find((source) => source.kind === 'warn') ?? features.find((feature) => feature.kind === 'warn')
   const freshnessOk = sources.every((source) => source.kind === 'ok') && features.every((feature) => feature.kind === 'ok')
+  const jobStatus = jobError ?? (jobResult ? `${jobResult.action} ${jobResult.ok ? 'finished' : 'failed'} - ${jobResult.steps.length} step${jobResult.steps.length === 1 ? '' : 's'}` : 'ready')
+
+  async function trigger(action: IngestionAction) {
+    setRunningAction(action)
+    setJobError(null)
+    setJobResult(null)
+    try {
+      const result = await runIngestionJob({
+        action,
+        limit: 100,
+        max_pages: 5,
+        include_closed: true,
+        closed_only: action === 'polymarket-price-history',
+        include_trades: true,
+        timeout_sec: action === 'polymarket-full-refresh' ? 900 : 300,
+      })
+      setJobResult(result)
+      setRefreshKey((value) => value + 1)
+    } catch (err) {
+      setJobError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRunningAction(null)
+    }
+  }
+
+  if (sources.length === 0 && features.length === 0 && data.snapshot_count === 0) {
+    return (
+      <ConsoleShell active="ingest" onNavigate={onNavigate} {...shellProps}>
+        <div style={{ display: 'grid', placeItems: 'center', height: '100%', padding: 24 }}>
+          <div className="card" style={{ width: 'min(520px, 100%)', padding: 18, textAlign: 'center' }}>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>ingestion</div>
+            <h3 style={{ fontSize: 18, marginBottom: 6 }}>No ingestion data loaded</h3>
+            <p className="c-muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              Run an ingestion job or connect Postgres to populate source freshness and feature status.
+            </p>
+            <div className="middle" style={{ gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 14 }}>
+              <button className="chip" disabled={runningAction !== null} onClick={() => trigger('migrate')}>Migrate</button>
+              <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-cs')}>Markets</button>
+              <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-closed')}>Closed</button>
+              <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-price-history')}>Prices</button>
+              <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-account-history')}>Account</button>
+              <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-reconcile')}>Reconcile</button>
+              <button className="chip pos" disabled={runningAction !== null} onClick={() => trigger('polymarket-full-refresh')}>Full refresh</button>
+            </div>
+            <div className={jobError || jobResult?.ok === false ? 'c-neg' : 'c-muted'} style={{ marginTop: 10, fontSize: 12 }}>
+              {runningAction ? `${runningAction} running` : jobStatus}
+            </div>
+          </div>
+        </div>
+      </ConsoleShell>
+    )
+  }
 
   return (
-    <ConsoleShell active="ingest" onNavigate={onNavigate}>
+    <ConsoleShell active="ingest" onNavigate={onNavigate} {...shellProps}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ padding: '14px 18px 12px', borderBottom: '1px solid var(--border)' }}>
           <div className="between">
@@ -47,9 +106,24 @@ export default function Ingestion({ onNavigate }: { onNavigate: (s: Screen) => v
               <span className={data.leakage_tests_ok ? 'chip pos' : 'chip neg'}><span className={data.leakage_tests_ok ? 'dot ok' : 'dot bad'} />leakage {data.leakage_tests_ok ? 'ok' : 'fail'}</span>
               <span className={warning ? 'chip warn' : 'chip pos'}><span className={warning ? 'dot warn' : 'dot ok'} />{warning ? `${warning.name} ${warning.fresh}` : 'freshness ok'}</span>
               <div className="vr" style={{ height: 18 }} />
-              <button className="chip" style={{ height: 26 }}>Replay snapshots</button>
+              <button className="chip" style={{ height: 26 }} onClick={() => setRefreshKey((value) => value + 1)}>Refresh</button>
             </div>
           </div>
+        </div>
+
+        <div style={{ padding: '10px 18px', borderBottom: '1px solid var(--rule)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div className="middle" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button className="chip" disabled={runningAction !== null} onClick={() => trigger('migrate')}>Migrate</button>
+            <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-cs')}>Markets</button>
+            <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-closed')}>Closed</button>
+            <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-price-history')}>Prices</button>
+            <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-account-history')}>Account</button>
+            <button className="chip" disabled={runningAction !== null} onClick={() => trigger('polymarket-reconcile')}>Reconcile</button>
+            <button className="chip pos" disabled={runningAction !== null} onClick={() => trigger('polymarket-full-refresh')}>Full refresh</button>
+          </div>
+          <span className={jobError || jobResult?.ok === false ? 'chip neg' : runningAction ? 'chip warn' : 'chip ghost'} style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {runningAction ? `${runningAction} running` : jobStatus}
+          </span>
         </div>
 
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--rule)' }}>
@@ -148,7 +222,7 @@ export default function Ingestion({ onNavigate }: { onNavigate: (s: Screen) => v
                 <Status kind="ok">idempotency</Status>
               </div>
               <span className="c-muted" style={{ fontSize: 11, marginTop: 4 }}>
-                The API surfaces raw source freshness, feature recency, and market snapshot lag from fixtures or Postgres.
+                The API surfaces raw source freshness, feature recency, and market snapshot lag from the configured data source.
               </span>
             </div>
           </div>

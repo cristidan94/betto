@@ -6,6 +6,7 @@ import json
 from urllib.error import URLError
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Any
 
 from core import __version__
 from core.config import load_settings
@@ -27,6 +28,13 @@ def validate_config(args: argparse.Namespace) -> int:
         "polymarket_gamma_url": settings.polymarket_gamma_url,
         "polymarket_clob_url": settings.polymarket_clob_url,
         "polymarket_snapshot_interval_sec": settings.polymarket_snapshot_interval_sec,
+        "polymarket_api_key": "***" if settings.polymarket_api_key else "",
+        "polymarket_api_secret": "***" if settings.polymarket_api_secret else "",
+        "polymarket_api_passphrase": "***" if settings.polymarket_api_passphrase else "",
+        "polymarket_private_key": "***" if settings.polymarket_private_key else "",
+        "polymarket_chain_id": settings.polymarket_chain_id,
+        "polymarket_address": settings.polymarket_address,
+        "polymarket_credentials_configured": settings.polymarket_credentials_configured,
         "default_timezone": settings.default_timezone,
         "oddspapi_api_key": "***" if settings.oddspapi_api_key else "",
         "oddspapi_base_url": settings.oddspapi_base_url,
@@ -132,6 +140,411 @@ def poll_polymarket_cs(args: argparse.Namespace) -> int:
     return 0
 
 
+def poll_polymarket_cs_loop(args: argparse.Namespace) -> int:
+    import signal
+    import time
+
+    settings = load_settings()
+    store = LocalRawStore(settings.raw_store_dir)
+    logger = get_logger("betto.polymarket.loop")
+    from sports.cs.ingestion import PolymarketClient
+
+    client = PolymarketClient(
+        gamma_url=settings.polymarket_gamma_url,
+        clob_url=settings.polymarket_clob_url,
+    )
+
+    interval = args.interval or settings.polymarket_snapshot_interval_sec
+    max_pages = args.max_pages
+    running = True
+
+    def handle_stop(signum: int, frame: object) -> None:
+        nonlocal running
+        running = False
+        logger.info("received stop signal, finishing current cycle")
+
+    signal.signal(signal.SIGINT, handle_stop)
+    signal.signal(signal.SIGTERM, handle_stop)
+
+    cycle = 0
+    while running:
+        cycle += 1
+        cycle_start = time.monotonic()
+        total_markets = 0
+        total_snapshots = 0
+        new_markets: list[str] = []
+        resolved_markets: list[str] = []
+
+        try:
+            offset = 0
+            page = 0
+            while page < max_pages:
+                discovery = client.discover_cs_markets(
+                    limit=100, offset=offset, include_closed=args.include_closed,
+                )
+                store.put(discovery.raw_payload)
+
+                for market in discovery.markets:
+                    total_markets += 1
+                    if market.meta.closed:
+                        resolved_markets.append(market.market.market_id)
+                    for token in market.tokens:
+                        try:
+                            book = client.get_order_book(market.market.market_id, token)
+                            store.put(book.raw_payload)
+                            total_snapshots += 1
+                        except URLError:
+                            logger.warning("failed to fetch order book", extra={
+                                "source_id": f"clob-book-{token.token_id}",
+                            })
+
+                if len(discovery.markets) == 0:
+                    break
+                offset += 100
+                page += 1
+
+        except URLError as exc:
+            logger.error("network error during polling cycle", extra={"detail": str(exc)})
+
+        elapsed = time.monotonic() - cycle_start
+        logger.info(
+            "polling cycle complete",
+            extra={
+                "source": "polymarket",
+                "source_id": f"cycle-{cycle}",
+                "markets": total_markets,
+                "snapshots": total_snapshots,
+                "resolved": len(resolved_markets),
+                "elapsed_sec": round(elapsed, 2),
+            },
+        )
+        print(json.dumps({
+            "cycle": cycle,
+            "markets": total_markets,
+            "snapshots": total_snapshots,
+            "resolved": len(resolved_markets),
+            "elapsed_sec": round(elapsed, 2),
+            "next_poll_sec": interval,
+        }, indent=2, sort_keys=True))
+
+        if not running:
+            break
+        time.sleep(interval)
+
+    logger.info("polling loop stopped", extra={"source": "polymarket", "cycles_completed": cycle})
+    return 0
+
+
+def db_ingest_polymarket_cs_loop(args: argparse.Namespace) -> int:
+    import signal
+    import time
+
+    settings = load_settings()
+    store = LocalRawStore(settings.raw_store_dir)
+    logger = get_logger("betto.polymarket.db_loop")
+    from sports.cs.ingestion import PolymarketClient
+
+    client = PolymarketClient(
+        gamma_url=settings.polymarket_gamma_url,
+        clob_url=settings.polymarket_clob_url,
+    )
+
+    interval = args.interval or settings.polymarket_snapshot_interval_sec
+    max_pages = args.max_pages
+    running = True
+
+    def handle_stop(signum: int, frame: object) -> None:
+        nonlocal running
+        running = False
+        logger.info("received stop signal, finishing current cycle")
+
+    signal.signal(signal.SIGINT, handle_stop)
+    signal.signal(signal.SIGTERM, handle_stop)
+
+    cycle = 0
+    while running:
+        cycle += 1
+        total_markets = 0
+        total_snapshots = 0
+
+        try:
+            with PostgresExecutor(settings.database_url) as db:
+                repo = PostgresRepository(db)
+                offset = 0
+                page = 0
+                while page < max_pages:
+                    discovery = client.discover_cs_markets(
+                        limit=100, offset=offset, include_closed=args.include_closed,
+                    )
+                    repo.upsert_raw_object(store.put(discovery.raw_payload))
+
+                    for market in discovery.markets:
+                        repo.upsert_market(market.market)
+                        repo.update_market_polymarket_meta(
+                            market.market.market_id,
+                            _polymarket_meta_payload(market),
+                            market.meta.description,
+                        )
+                        total_markets += 1
+                        for token in market.tokens:
+                            try:
+                                book = client.get_order_book(market.market.market_id, token)
+                                repo.upsert_raw_object(store.put(book.raw_payload))
+                                repo.insert_market_snapshot(book.snapshot)
+                                total_snapshots += 1
+                            except URLError:
+                                logger.warning("failed to fetch order book", extra={
+                                    "source_id": f"clob-book-{token.token_id}",
+                                })
+
+                    if len(discovery.markets) == 0:
+                        break
+                    offset += 100
+                    page += 1
+
+        except MissingPostgresDriverError as exc:
+            return print_error("missing_postgres_driver", str(exc))
+        except URLError as exc:
+            logger.error("network error during polling cycle", extra={"detail": str(exc)})
+        except Exception as exc:
+            logger.error("db error during polling cycle", extra={"detail": str(exc)})
+
+        logger.info("db ingest cycle complete", extra={
+            "source": "polymarket",
+            "source_id": f"cycle-{cycle}",
+            "markets": total_markets,
+            "snapshots": total_snapshots,
+        })
+        print(json.dumps({
+            "cycle": cycle,
+            "markets_upserted": total_markets,
+            "snapshots_inserted": total_snapshots,
+            "next_poll_sec": interval,
+        }, indent=2, sort_keys=True))
+
+        if not running:
+            break
+        time.sleep(interval)
+
+    return 0
+
+
+def _polymarket_meta_payload(market: Any) -> dict[str, Any]:
+    meta = market.meta
+    return {
+        "volume_usd": meta.volume_usd,
+        "liquidity_usd": meta.liquidity_usd,
+        "outcome_prices": list(meta.outcome_prices) if meta.outcome_prices is not None else None,
+        "start_date": meta.start_date.isoformat() if meta.start_date is not None else None,
+        "end_date": meta.end_date.isoformat() if meta.end_date is not None else None,
+        "active": meta.active,
+        "closed": meta.closed,
+        "archived": meta.archived,
+        "accepting_orders": meta.accepting_orders,
+        "neg_risk": meta.neg_risk,
+        "spread": meta.spread,
+        "event_slug": meta.event_slug,
+        "event_title": meta.event_title,
+        "tokens": [
+            {"token_id": token.token_id, "outcome": token.outcome}
+            for token in market.tokens
+        ],
+    }
+
+
+def place_polymarket_bet(args: argparse.Namespace) -> int:
+    from core.execution import BetMode, ExecutionService
+    from core.edge import Recommendation
+    from core.markets import MarketSnapshot
+
+    settings = load_settings()
+    mode = BetMode(args.mode)
+
+    if mode == BetMode.LIVE and not settings.polymarket_credentials_configured:
+        return print_error("credentials_missing", "Set BETTO_POLYMARKET_API_KEY, BETTO_POLYMARKET_API_SECRET, and BETTO_POLYMARKET_PRIVATE_KEY")
+
+    order_client = None
+    if mode == BetMode.LIVE:
+        from sports.cs.ingestion import PolymarketOrderClient
+        order_client = PolymarketOrderClient(
+            clob_url=settings.polymarket_clob_url,
+            api_key=settings.polymarket_api_key,
+            api_secret=settings.polymarket_api_secret,
+            api_passphrase=settings.polymarket_api_passphrase,
+            private_key=settings.polymarket_private_key,
+            chain_id=settings.polymarket_chain_id,
+            address=settings.polymarket_address,
+        )
+
+    svc = ExecutionService(
+        mode=mode,
+        order_client=order_client,
+        bankroll_usd=args.bankroll_usd,
+    )
+
+    rec = Recommendation(
+        market_id=args.market_id,
+        outcome=args.outcome,
+        taken_at=datetime.now(timezone.utc),
+        model_prob=args.model_prob,
+        market_prob=args.market_prob,
+        edge=args.model_prob - args.market_prob,
+        bankroll_fraction=args.size_fraction,
+        passes_filter=True,
+        reason="manual_bet",
+    )
+    snap = MarketSnapshot(
+        market_id=args.market_id,
+        outcome=args.outcome,
+        taken_at=datetime.now(timezone.utc),
+        best_bid=args.market_prob - 0.01,
+        best_ask=args.market_prob + 0.01,
+        last_trade_price=args.market_prob,
+        depth_bid_1pct=None,
+        depth_ask_1pct=None,
+    )
+
+    result = svc.execute_recommendation(rec, snap, token_id=args.token_id)
+    print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    return 0 if result.success else 1
+
+
+def list_polymarket_orders(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.polymarket_credentials_configured:
+        return print_error("credentials_missing", "Set Polymarket credentials to list live orders")
+
+    from sports.cs.ingestion import PolymarketOrderClient
+    client = PolymarketOrderClient(
+        clob_url=settings.polymarket_clob_url,
+        api_key=settings.polymarket_api_key,
+        api_secret=settings.polymarket_api_secret,
+        api_passphrase=settings.polymarket_api_passphrase,
+        private_key=settings.polymarket_private_key,
+        chain_id=settings.polymarket_chain_id,
+        address=settings.polymarket_address,
+    )
+
+    orders = client.get_open_orders(market_id=args.market_id if hasattr(args, "market_id") else None)
+    print(json.dumps([{
+        "order_id": o.order_id,
+        "market_id": o.market_id,
+        "token_id": o.token_id,
+        "side": o.side,
+        "size": o.size,
+        "price": o.price,
+        "status": o.status,
+        "filled_size": o.filled_size,
+    } for o in orders], indent=2, sort_keys=True))
+    return 0
+
+
+def cancel_polymarket_order(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.polymarket_credentials_configured:
+        return print_error("credentials_missing", "Set Polymarket credentials to cancel orders")
+
+    from sports.cs.ingestion import PolymarketOrderClient
+    client = PolymarketOrderClient(
+        clob_url=settings.polymarket_clob_url,
+        api_key=settings.polymarket_api_key,
+        api_secret=settings.polymarket_api_secret,
+        api_passphrase=settings.polymarket_api_passphrase,
+        private_key=settings.polymarket_private_key,
+        chain_id=settings.polymarket_chain_id,
+        address=settings.polymarket_address,
+    )
+
+    success = client.cancel_order(args.order_id)
+    print(json.dumps({"cancelled": success, "order_id": args.order_id}, indent=2, sort_keys=True))
+    return 0 if success else 1
+
+
+def db_ingest_polymarket_account_history(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.polymarket_credentials_configured:
+        return print_error("credentials_missing", "Set Polymarket credentials before ingesting account history")
+
+    from sports.cs.ingestion import PolymarketOrderClient
+
+    client = PolymarketOrderClient(
+        clob_url=settings.polymarket_clob_url,
+        api_key=settings.polymarket_api_key,
+        api_secret=settings.polymarket_api_secret,
+        api_passphrase=settings.polymarket_api_passphrase,
+        private_key=settings.polymarket_private_key,
+        chain_id=settings.polymarket_chain_id,
+        address=settings.polymarket_address,
+    )
+
+    orders_upserted = 0
+    trades_upserted = 0
+    order_cursor = args.cursor
+    trade_cursor = args.cursor
+
+    try:
+        with PostgresExecutor(settings.database_url) as db:
+            repo = PostgresRepository(db)
+            for _ in range(args.max_pages):
+                payload = client.get_user_orders(limit=args.limit, cursor=order_cursor, status=args.status)
+                if payload.get("error"):
+                    return print_error("orders_fetch_failed", str(payload["error"]))
+                rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+                for row in rows:
+                    if isinstance(row, dict):
+                        repo.upsert_polymarket_account_order(row)
+                        orders_upserted += 1
+                order_cursor = payload.get("next_cursor") or payload.get("nextCursor")
+                if not rows or not order_cursor:
+                    break
+
+            if args.include_trades:
+                for _ in range(args.max_pages):
+                    payload = client.get_trades(limit=args.limit, cursor=trade_cursor, market=args.market)
+                    if payload.get("error"):
+                        return print_error("trades_fetch_failed", str(payload["error"]))
+                    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+                    for row in rows:
+                        if isinstance(row, dict):
+                            repo.upsert_polymarket_trade(row)
+                            trades_upserted += 1
+                    trade_cursor = payload.get("next_cursor") or payload.get("nextCursor")
+                    if not rows or not trade_cursor:
+                        break
+    except MissingPostgresDriverError as exc:
+        return print_error("missing_postgres_driver", str(exc))
+    except Exception as exc:
+        return print_error("account_history_ingest_failed", str(exc))
+
+    print(json.dumps({
+        "orders_upserted": orders_upserted,
+        "trades_upserted": trades_upserted,
+        "next_order_cursor": order_cursor,
+        "next_trade_cursor": trade_cursor if args.include_trades else None,
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+def db_reconcile_polymarket_settlements(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    try:
+        with PostgresExecutor(settings.database_url) as db:
+            repo = PostgresRepository(db)
+            orders_reconciled = 0 if args.skip_trades else repo.reconcile_polymarket_trades_to_orders()
+            bets_settled = repo.settle_bets_from_polymarket_resolutions(strategy_id=args.strategy_id)
+    except MissingPostgresDriverError as exc:
+        return print_error("missing_postgres_driver", str(exc))
+    except Exception as exc:
+        return print_error("polymarket_settlement_reconcile_failed", str(exc))
+
+    print(json.dumps({
+        "orders_reconciled_from_trades": orders_reconciled,
+        "bets_settled_from_market_resolutions": bets_settled,
+        "strategy_id": args.strategy_id,
+    }, indent=2, sort_keys=True))
+    return 0
+
+
 def db_check(args: argparse.Namespace) -> int:
     settings = load_settings()
     try:
@@ -212,6 +625,11 @@ def db_ingest_polymarket_cs(args: argparse.Namespace) -> int:
             repo.upsert_raw_object(store.put(discovery.raw_payload))
             for market in discovery.markets:
                 repo.upsert_market(market.market)
+                repo.update_market_polymarket_meta(
+                    market.market.market_id,
+                    _polymarket_meta_payload(market),
+                    market.meta.description,
+                )
                 for token in market.tokens:
                     try:
                         book = client.get_order_book(market.market.market_id, token)
@@ -226,6 +644,112 @@ def db_ingest_polymarket_cs(args: argparse.Namespace) -> int:
 
     snapshot_count = sum(len(market.tokens) for market in discovery.markets)
     print(json.dumps({"markets_upserted": len(discovery.markets), "snapshots_inserted": snapshot_count}, indent=2, sort_keys=True))
+    return 0
+
+
+def db_backfill_polymarket_cs_closed(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = LocalRawStore(settings.raw_store_dir)
+    from sports.cs.ingestion import PolymarketClient
+
+    client = PolymarketClient(
+        gamma_url=settings.polymarket_gamma_url,
+        clob_url=settings.polymarket_clob_url,
+    )
+    total_markets = 0
+    resolved = 0
+    pages = 0
+
+    try:
+        with PostgresExecutor(settings.database_url) as db:
+            repo = PostgresRepository(db)
+            offset = args.offset
+            while pages < args.max_pages:
+                discovery = client.discover_cs_markets(
+                    limit=args.limit,
+                    offset=offset,
+                    include_closed=True,
+                )
+                repo.upsert_raw_object(store.put(discovery.raw_payload))
+                if not discovery.markets:
+                    break
+                for market in discovery.markets:
+                    repo.upsert_market(market.market)
+                    repo.update_market_polymarket_meta(
+                        market.market.market_id,
+                        _polymarket_meta_payload(market),
+                        market.meta.description,
+                    )
+                    total_markets += 1
+                    if market.market.resolved_outcome or market.meta.closed:
+                        resolved += 1
+                pages += 1
+                offset += args.limit
+    except MissingPostgresDriverError as exc:
+        return print_error("missing_postgres_driver", str(exc))
+    except URLError as exc:
+        return print_error("network_unavailable", str(exc))
+    except Exception as exc:
+        return print_error("db_backfill_failed", str(exc))
+
+    print(json.dumps({
+        "markets_upserted": total_markets,
+        "resolved_or_closed": resolved,
+        "pages": pages,
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+def db_ingest_polymarket_price_history(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = LocalRawStore(settings.raw_store_dir)
+    from sports.cs.ingestion.polymarket import PolymarketClient, PolymarketToken
+
+    client = PolymarketClient(
+        gamma_url=settings.polymarket_gamma_url,
+        clob_url=settings.polymarket_clob_url,
+    )
+    tokens_seen = 0
+    snapshots_processed = 0
+
+    try:
+        with PostgresExecutor(settings.database_url) as db:
+            repo = PostgresRepository(db)
+            tokens = repo.list_polymarket_tokens_for_price_history(
+                limit=args.limit,
+                closed_only=args.closed_only,
+            )
+            for token_row in tokens:
+                token_id = str(token_row.get("token_id") or "")
+                outcome = str(token_row.get("outcome") or "")
+                market_id = str(token_row.get("market_id") or "")
+                if not token_id or not outcome or not market_id:
+                    continue
+                history = client.get_price_history(
+                    market_id=market_id,
+                    token=PolymarketToken(token_id=token_id, outcome=outcome),
+                    start_ts=args.start_ts,
+                    end_ts=args.end_ts,
+                    fidelity=args.fidelity,
+                )
+                tokens_seen += 1
+                repo.upsert_raw_object(store.put(history.raw_payload))
+                for snapshot in history.snapshots:
+                    repo.insert_market_snapshot(snapshot)
+                    snapshots_processed += 1
+    except MissingPostgresDriverError as exc:
+        return print_error("missing_postgres_driver", str(exc))
+    except URLError as exc:
+        return print_error("network_unavailable", str(exc))
+    except Exception as exc:
+        return print_error("price_history_ingest_failed", str(exc))
+
+    print(json.dumps({
+        "tokens_seen": tokens_seen,
+        "snapshots_processed": snapshots_processed,
+        "closed_only": args.closed_only,
+        "fidelity": args.fidelity,
+    }, indent=2, sort_keys=True))
     return 0
 
 
@@ -352,9 +876,9 @@ def db_ingest_hltv_scraped(args: argparse.Namespace) -> int:
         scraped_dir = settings.project_root / scraped_dir
     scraped_dir = scraped_dir.resolve()
 
-    fixture_paths = sorted(scraped_dir.glob("*.json"))
+    fixture_paths = _hltv_match_json_paths(scraped_dir)
     if not fixture_paths:
-        return print_error("no_fixtures", f"No JSON files found in {scraped_dir}")
+        return print_error("no_fixtures", f"No HLTV match JSON files found in {scraped_dir}")
 
     results: dict[str, object] = {
         "fixtures_found": len(fixture_paths),
@@ -499,6 +1023,10 @@ def convert_cs_kaggle_hltv_results(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def _hltv_match_json_paths(directory: Path) -> list[Path]:
+    return sorted(path for path in directory.glob("*.json") if path.stem.isdigit())
 
 
 def convert_cs_kaggle_competitive_results(args: argparse.Namespace) -> int:
@@ -1562,7 +2090,7 @@ def convert_hltv_scraped(args: argparse.Namespace) -> int:
 
     imported = 0
     skipped = 0
-    for src in sorted(raw_dir.glob("*.json")):
+    for src in _hltv_match_json_paths(raw_dir):
         target = out_dir / src.name
         if target.exists():
             skipped += 1
@@ -1670,6 +2198,12 @@ def main(argv: list[str] | None = None) -> int:
     pm_parser.add_argument("--include-closed", action="store_true")
     pm_parser.set_defaults(func=poll_polymarket_cs)
 
+    pm_loop_parser = subparsers.add_parser("poll-polymarket-cs-loop")
+    pm_loop_parser.add_argument("--interval", type=int, default=0, help="Seconds between polls (0 = use config)")
+    pm_loop_parser.add_argument("--max-pages", type=int, default=10)
+    pm_loop_parser.add_argument("--include-closed", action="store_true")
+    pm_loop_parser.set_defaults(func=poll_polymarket_cs_loop)
+
     db_check_parser = subparsers.add_parser("db-check")
     db_check_parser.set_defaults(func=db_check)
 
@@ -1685,6 +2219,59 @@ def main(argv: list[str] | None = None) -> int:
     db_pm_parser.add_argument("--offset", type=int, default=0)
     db_pm_parser.add_argument("--include-closed", action="store_true")
     db_pm_parser.set_defaults(func=db_ingest_polymarket_cs)
+
+    db_pm_loop_parser = subparsers.add_parser("db-ingest-polymarket-cs-loop")
+    db_pm_loop_parser.add_argument("--interval", type=int, default=0, help="Seconds between polls (0 = use config)")
+    db_pm_loop_parser.add_argument("--max-pages", type=int, default=10)
+    db_pm_loop_parser.add_argument("--include-closed", action="store_true")
+    db_pm_loop_parser.set_defaults(func=db_ingest_polymarket_cs_loop)
+
+    db_pm_closed_parser = subparsers.add_parser("db-backfill-polymarket-cs-closed")
+    db_pm_closed_parser.add_argument("--limit", type=int, default=100)
+    db_pm_closed_parser.add_argument("--offset", type=int, default=0)
+    db_pm_closed_parser.add_argument("--max-pages", type=int, default=10)
+    db_pm_closed_parser.set_defaults(func=db_backfill_polymarket_cs_closed)
+
+    db_pm_price_history_parser = subparsers.add_parser("db-ingest-polymarket-price-history")
+    db_pm_price_history_parser.add_argument("--limit", type=int, default=100)
+    db_pm_price_history_parser.add_argument("--closed-only", action="store_true")
+    db_pm_price_history_parser.add_argument("--fidelity", default="720")
+    db_pm_price_history_parser.add_argument("--start-ts", type=int)
+    db_pm_price_history_parser.add_argument("--end-ts", type=int)
+    db_pm_price_history_parser.set_defaults(func=db_ingest_polymarket_price_history)
+
+    bet_parser = subparsers.add_parser("place-polymarket-bet")
+    bet_parser.add_argument("--market-id", required=True)
+    bet_parser.add_argument("--outcome", required=True)
+    bet_parser.add_argument("--token-id", default="")
+    bet_parser.add_argument("--model-prob", type=float, required=True)
+    bet_parser.add_argument("--market-prob", type=float, required=True)
+    bet_parser.add_argument("--size-fraction", type=float, default=0.02)
+    bet_parser.add_argument("--bankroll-usd", type=float, default=1000.0)
+    bet_parser.add_argument("--mode", choices=["paper", "live"], default="paper")
+    bet_parser.set_defaults(func=place_polymarket_bet)
+
+    list_orders_parser = subparsers.add_parser("list-polymarket-orders")
+    list_orders_parser.add_argument("--market-id", default=None)
+    list_orders_parser.set_defaults(func=list_polymarket_orders)
+
+    cancel_order_parser = subparsers.add_parser("cancel-polymarket-order")
+    cancel_order_parser.add_argument("--order-id", required=True)
+    cancel_order_parser.set_defaults(func=cancel_polymarket_order)
+
+    account_history_parser = subparsers.add_parser("db-ingest-polymarket-account-history")
+    account_history_parser.add_argument("--limit", type=int, default=100)
+    account_history_parser.add_argument("--cursor")
+    account_history_parser.add_argument("--status")
+    account_history_parser.add_argument("--market")
+    account_history_parser.add_argument("--max-pages", type=int, default=5)
+    account_history_parser.add_argument("--include-trades", action="store_true")
+    account_history_parser.set_defaults(func=db_ingest_polymarket_account_history)
+
+    reconcile_pm_parser = subparsers.add_parser("db-reconcile-polymarket-settlements")
+    reconcile_pm_parser.add_argument("--strategy-id")
+    reconcile_pm_parser.add_argument("--skip-trades", action="store_true")
+    reconcile_pm_parser.set_defaults(func=db_reconcile_polymarket_settlements)
 
     parse_fixture_parser = subparsers.add_parser("parse-cs-fixture")
     parse_fixture_parser.add_argument("--path", required=True)

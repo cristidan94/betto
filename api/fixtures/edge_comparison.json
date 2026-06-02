@@ -1,0 +1,57 @@
+{
+  "comparisons": [
+    {
+      "contest_id": "cs:contest:hltv:2370001",
+      "match": "Natus Vincere vs Team Vitality",
+      "market_type": "match_winner",
+      "outcome": "Natus Vincere",
+      "model_prob": 0.62,
+      "polymarket_prob": 0.58,
+      "polymarket_volume": 45200.50,
+      "oddspapi_prob": 0.55,
+      "oddspapi_bookmaker": "Pinnacle",
+      "edge_vs_polymarket": 0.04,
+      "edge_vs_oddspapi": 0.07,
+      "edge_diff": -0.03,
+      "sources": [
+        { "source": "polymarket", "prob": 0.58, "best_bid": 0.56, "best_ask": 0.60 },
+        { "source": "oddspapi", "prob": 0.55, "bookmaker": "Pinnacle" }
+      ]
+    },
+    {
+      "contest_id": "cs:contest:hltv:2370001",
+      "match": "Natus Vincere vs Team Vitality",
+      "market_type": "map_winner",
+      "outcome": "Natus Vincere (Map 1)",
+      "model_prob": 0.55,
+      "polymarket_prob": 0.51,
+      "polymarket_volume": 12300.00,
+      "oddspapi_prob": 0.48,
+      "oddspapi_bookmaker": "Pinnacle",
+      "edge_vs_polymarket": 0.04,
+      "edge_vs_oddspapi": 0.07,
+      "edge_diff": -0.03,
+      "sources": [
+        { "source": "polymarket", "prob": 0.51, "best_bid": 0.49, "best_ask": 0.53 },
+        { "source": "oddspapi", "prob": 0.48, "bookmaker": "Pinnacle" }
+      ]
+    },
+    {
+      "contest_id": "cs:contest:hltv:2370002",
+      "match": "G2 Esports vs FaZe Clan",
+      "market_type": "match_winner",
+      "outcome": "G2 Esports",
+      "model_prob": 0.48,
+      "polymarket_prob": 0.52,
+      "polymarket_volume": 32100.00,
+      "oddspapi_prob": null,
+      "oddspapi_bookmaker": null,
+      "edge_vs_polymarket": -0.04,
+      "edge_vs_oddspapi": null,
+      "edge_diff": null,
+      "sources": [
+        { "source": "polymarket", "prob": 0.52, "best_bid": 0.50, "best_ask": 0.54 }
+      ]
+    }
+  ]
+}

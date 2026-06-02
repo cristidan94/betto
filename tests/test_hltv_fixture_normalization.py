@@ -39,81 +39,9 @@ FIXTURE = {
 }
 
 
-RICH_FIXTURE = {
-    "hltv_id": "2394722",
-    "schema_version": "hltv-fixture-v1",
-    "source": {"name": "hltv-scraper", "url": "https://example.com", "stats_url": "https://example.com/stats"},
-    "status": "finished",
-    "best_of": 3,
-    "match_stage": "Round of 16",
-    "scheduled_at": "2026-05-29T17:00:00+00:00",
-    "event": {"hltv_id": "9171", "name": "Thunderpick World Championship", "tier": 2, "hltv_stars": 0},
-    "team_a": {"hltv_id": "13644", "name": "TDK"},
-    "team_b": {"hltv_id": "13403", "name": "TNC"},
-    "head_to_head": {"team_a_wins": 3, "team_b_wins": 2},
-    "players": [
-        {"hltv_id": "16555", "nickname": "Ax1Le", "team_hltv_id": "13644"},
-        {"hltv_id": "20312", "nickname": "deko", "team_hltv_id": "13403"},
-    ],
-    "vetoes": [
-        {"order_idx": 1, "action": "ban", "map_name": "Nuke", "team_hltv_id": "13644"},
-        {"order_idx": 2, "action": "pick", "map_name": "Dust2", "team_hltv_id": "13403"},
-        {"order_idx": 3, "action": "decider", "map_name": "Mirage", "team_hltv_id": None},
-    ],
-    "maps": [
-        {
-            "map_index": 1,
-            "map_name": "Dust2",
-            "map_stats_id": "230451",
-            "overtime": False,
-            "winner_hltv_id": "13644",
-            "team_a_score": 13,
-            "team_a_first_half": 7,
-            "team_a_second_half": 6,
-            "team_b_score": 6,
-            "team_b_first_half": 5,
-            "team_b_second_half": 1,
-            "player_stats": {
-                "ax1le": {
-                    "kills": 19,
-                    "deaths": 10,
-                    "adr": 94.6,
-                    "rating": 1.77,
-                    "kast_pct": 84.2,
-                    "ct_kills": 9,
-                    "ct_deaths": 3,
-                    "t_kills": 10,
-                    "t_deaths": 7,
-                    "assists": None,
-                    "headshot_pct": None,
-                    "first_kills": None,
-                    "first_deaths": None,
-                    "clutches_won": None,
-                    "flash_assists": None,
-                    "trade_deaths": None,
-                },
-                "deko": {
-                    "kills": 8,
-                    "deaths": 15,
-                    "adr": 55.3,
-                    "rating": 0.72,
-                    "kast_pct": 63.2,
-                    "ct_kills": 4,
-                    "ct_deaths": 8,
-                    "t_kills": 4,
-                    "t_deaths": 7,
-                    "assists": 3,
-                    "headshot_pct": 50.0,
-                    "first_kills": 1,
-                    "first_deaths": 2,
-                    "clutches_won": 0,
-                    "flash_assists": 2,
-                    "trade_deaths": 1,
-                },
-            },
-        }
-    ],
-}
+RICH_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "hltv_scraped_sample.json").read_text(encoding="utf-8")
+)
 
 
 class HltvFixtureNormalizationTests(unittest.TestCase):
@@ -204,33 +132,37 @@ class RecordDefaultsTests(unittest.TestCase):
 class RichParserTests(unittest.TestCase):
     def test_parse_extracts_match_stage_and_head_to_head(self) -> None:
         parsed = parse_hltv_payload(RICH_FIXTURE)
-        self.assertEqual(parsed.match_stage, "Round of 16")
-        self.assertEqual(parsed.head_to_head, {"team_a_wins": 3, "team_b_wins": 2})
+        self.assertEqual(parsed.match_stage, "Upper bracket")
+        self.assertEqual(parsed.head_to_head, {"team_a_wins": 1, "team_b_wins": 2})
 
     def test_parse_extracts_map_rich_fields(self) -> None:
         parsed = parse_hltv_payload(RICH_FIXTURE)
         parsed_map = parsed.maps[0]
-        self.assertEqual(parsed_map.map_stats_id, "230451")
+        self.assertEqual(parsed_map.map_name, "Ancient")
+        self.assertEqual(parsed_map.map_stats_id, "123276")
         self.assertFalse(parsed_map.overtime)
-        self.assertEqual(parsed_map.team_a_first_half, 7)
-        self.assertEqual(parsed_map.team_a_second_half, 6)
-        self.assertEqual(parsed_map.team_b_first_half, 5)
-        self.assertEqual(parsed_map.team_b_second_half, 1)
+        self.assertEqual(parsed_map.team_a_first_half, 12)
+        self.assertEqual(parsed_map.team_a_second_half, 4)
+        self.assertEqual(parsed_map.team_b_first_half, 3)
+        self.assertEqual(parsed_map.team_b_second_half, 3)
 
     def test_parse_extracts_player_stats_with_id_resolution(self) -> None:
         parsed = parse_hltv_payload(RICH_FIXTURE)
         stats = parsed.maps[0].player_stats
-        self.assertEqual(len(stats), 2)
-        ax1le = next(item for item in stats if item.player_hltv_id == "16555")
-        self.assertEqual(ax1le.team_hltv_id, "13644")
-        self.assertEqual(ax1le.kills, 19)
-        self.assertEqual(ax1le.ct_kills, 9)
-        self.assertIsNone(ax1le.assists)
-        deko = next(item for item in stats if item.player_hltv_id == "20312")
-        self.assertEqual(deko.assists, 3)
-        self.assertEqual(deko.first_deaths, 2)
-        self.assertEqual(deko.flash_assists, 2)
-        self.assertEqual(deko.trade_deaths, 1)
+        self.assertEqual(len(stats), 10)
+        device = next(item for item in stats if item.player_hltv_id == "7592")
+        self.assertEqual(device.team_hltv_id, "4411")
+        self.assertEqual(device.kills, 21)
+        self.assertEqual(device.ct_kills, 8)
+        self.assertEqual(device.assists, 3)
+        self.assertEqual(device.first_deaths, 1)
+        self.assertEqual(device.flash_assists, 2)
+        self.assertEqual(device.trade_deaths, 2)
+        sixer = next(item for item in stats if item.player_hltv_id == "147")
+        self.assertEqual(sixer.assists, 2)
+        self.assertEqual(sixer.first_deaths, 5)
+        self.assertEqual(sixer.flash_assists, 0)
+        self.assertEqual(sixer.trade_deaths, 0)
 
     def test_parse_handles_missing_player_stats(self) -> None:
         fixture = {
@@ -238,10 +170,10 @@ class RichParserTests(unittest.TestCase):
             "maps": [
                 {
                     "map_index": 1,
-                    "map_name": "Dust2",
-                    "team_a_score": 13,
+                    "map_name": "Ancient",
+                    "team_a_score": 16,
                     "team_b_score": 6,
-                    "winner_hltv_id": "13644",
+                    "winner_hltv_id": "4411",
                 }
             ],
         }
@@ -268,7 +200,7 @@ class RichParserTests(unittest.TestCase):
             "maps": [
                 {
                     **RICH_FIXTURE["maps"][0],
-                    "player_stats": {"ax1le": None},
+                    "player_stats": {"device": None},
                 }
             ],
         }
@@ -281,7 +213,7 @@ class RichParserTests(unittest.TestCase):
             "maps": [
                 {
                     **RICH_FIXTURE["maps"][0],
-                    "player_stats": ["ax1le"],
+                    "player_stats": ["device"],
                 }
             ],
         }
@@ -305,7 +237,7 @@ class RichParserTests(unittest.TestCase):
 
     def test_null_veto_team_hltv_id_for_decider(self) -> None:
         parsed = parse_hltv_payload(RICH_FIXTURE)
-        decider = parsed.vetoes[2]
+        decider = next(item for item in parsed.vetoes if item.action == "decider")
         self.assertIsNone(decider.team_hltv_id)
         self.assertEqual(decider.action, "decider")
 
@@ -320,8 +252,8 @@ class NormalizeRichMatchTests(unittest.TestCase):
     def test_normalize_passes_match_stage_and_head_to_head(self) -> None:
         normalized = normalize_match(parse_hltv_payload(RICH_FIXTURE))
         contest = normalized["contest"]
-        self.assertEqual(contest.match_stage, "Round of 16")
-        self.assertEqual(contest.head_to_head, {"team_a_wins": 3, "team_b_wins": 2})
+        self.assertEqual(contest.match_stage, "Upper bracket")
+        self.assertEqual(contest.head_to_head, {"team_a_wins": 1, "team_b_wins": 2})
 
     def test_normalize_plain_fixture_has_none_for_rich_fields(self) -> None:
         normalized = normalize_match(parse_hltv_payload(FIXTURE))
@@ -335,20 +267,20 @@ class FullPipelineIntegrationTests(unittest.TestCase):
         parsed = parse_hltv_payload(RICH_FIXTURE)
         normalized = normalize_match(parsed)
 
-        self.assertEqual(len(normalized["participants"]), 4)
+        self.assertEqual(len(normalized["participants"]), 12)
         self.assertIsNotNone(normalized["competition"])
-        self.assertEqual(normalized["contest"].match_stage, "Round of 16")
-        self.assertEqual(normalized["contest"].head_to_head, {"team_a_wins": 3, "team_b_wins": 2})
+        self.assertEqual(normalized["contest"].match_stage, "Upper bracket")
+        self.assertEqual(normalized["contest"].head_to_head, {"team_a_wins": 1, "team_b_wins": 2})
         self.assertEqual(len(normalized["contest_units"]), 1)
         self.assertEqual(len(normalized["cs_maps"]), 1)
-        self.assertEqual(len(normalized["cs_vetoes"]), 3)
+        self.assertEqual(len(normalized["cs_vetoes"]), 7)
 
         parsed_map = normalized["cs_maps"][0]
-        self.assertEqual(parsed_map.map_stats_id, "230451")
-        self.assertEqual(len(parsed_map.player_stats), 2)
-        ax1le = next(item for item in parsed_map.player_stats if item.player_hltv_id == "16555")
-        self.assertEqual(ax1le.kills, 19)
-        self.assertEqual(ax1le.ct_kills, 9)
+        self.assertEqual(parsed_map.map_stats_id, "123276")
+        self.assertEqual(len(parsed_map.player_stats), 10)
+        device = next(item for item in parsed_map.player_stats if item.player_hltv_id == "7592")
+        self.assertEqual(device.kills, 21)
+        self.assertEqual(device.ct_kills, 8)
 
     def test_fixture_without_stats_still_normalizes(self) -> None:
         no_stats = {
@@ -356,10 +288,10 @@ class FullPipelineIntegrationTests(unittest.TestCase):
             "maps": [
                 {
                     "map_index": 1,
-                    "map_name": "Dust2",
-                    "team_a_score": 13,
+                    "map_name": "Ancient",
+                    "team_a_score": 16,
                     "team_b_score": 6,
-                    "winner_hltv_id": "13644",
+                    "winner_hltv_id": "4411",
                 }
             ],
         }

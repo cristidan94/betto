@@ -39,9 +39,30 @@ class PolymarketToken:
 
 
 @dataclass(frozen=True)
+class PolymarketMarketMeta:
+    """Enriched Polymarket-specific fields not captured by the core Market model."""
+
+    volume_usd: float | None
+    liquidity_usd: float | None
+    outcome_prices: tuple[float, ...] | None
+    start_date: datetime | None
+    end_date: datetime | None
+    active: bool
+    closed: bool
+    archived: bool
+    accepting_orders: bool
+    neg_risk: bool
+    spread: float | None
+    description: str
+    event_slug: str
+    event_title: str
+
+
+@dataclass(frozen=True)
 class PolymarketMarket:
     market: Market
     tokens: tuple[PolymarketToken, ...]
+    meta: PolymarketMarketMeta
     raw: dict[str, Any]
 
 
@@ -55,6 +76,12 @@ class PolymarketDiscoveryResult:
 class PolymarketBookResult:
     raw_payload: FetchResult
     snapshot: MarketSnapshot
+
+
+@dataclass(frozen=True)
+class PolymarketPriceHistoryResult:
+    raw_payload: FetchResult
+    snapshots: tuple[MarketSnapshot, ...]
 
 
 class PolymarketClient:
@@ -113,6 +140,37 @@ class PolymarketClient:
         )
         return PolymarketBookResult(raw_payload=raw, snapshot=snapshot)
 
+    def get_price_history(
+        self,
+        market_id: str,
+        token: PolymarketToken,
+        *,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+        fidelity: int | str = 720,
+    ) -> PolymarketPriceHistoryResult:
+        params: dict[str, object] = {
+            "market": token.token_id,
+            "fidelity": fidelity,
+        }
+        if start_ts is not None:
+            params["startTs"] = start_ts
+        if end_ts is not None:
+            params["endTs"] = end_ts
+
+        response = self.http.get(self.clob_url, "/prices-history", params=params)
+        payload = response.json()
+        snapshots = parse_price_history(market_id=market_id, outcome=token.outcome, payload=payload)
+        raw = FetchResult(
+            source=self.source,
+            source_id=f"clob-prices-history-{token.token_id}-{fidelity}",
+            url=response.url,
+            content=response.body,
+            content_type=response.headers.get("content-type", "application/json"),
+            fetched_at=datetime.now(timezone.utc),
+        )
+        return PolymarketPriceHistoryResult(raw_payload=raw, snapshots=snapshots)
+
 
 def is_counter_strike_market(row: dict[str, Any]) -> bool:
     haystack_parts: list[str] = []
@@ -158,7 +216,29 @@ def parse_gamma_market(row: dict[str, Any]) -> PolymarketMarket | None:
         resolved_at=_parse_optional_datetime(row.get("resolvedAt") or row.get("resolved_at")),
         resolved_outcome=row.get("resolvedOutcome") or row.get("resolved_outcome"),
     )
-    return PolymarketMarket(market=market, tokens=tokens, raw=row)
+
+    outcome_prices = _parse_jsonish_floats(row.get("outcomePrices"))
+    spread: float | None = None
+    if outcome_prices and len(outcome_prices) >= 2:
+        spread = round(abs(outcome_prices[0] - outcome_prices[1]), 6)
+
+    meta = PolymarketMarketMeta(
+        volume_usd=_parse_float(row.get("volumeNum") or row.get("volume")),
+        liquidity_usd=_parse_float(row.get("liquidityNum") or row.get("liquidity")),
+        outcome_prices=tuple(outcome_prices) if outcome_prices else None,
+        start_date=_parse_optional_datetime(row.get("startDate") or row.get("start_date")),
+        end_date=_parse_optional_datetime(row.get("endDate") or row.get("end_date")),
+        active=bool(row.get("active", False)),
+        closed=bool(row.get("closed", False)),
+        archived=bool(row.get("archived", False)),
+        accepting_orders=bool(row.get("acceptingOrders", row.get("accepting_orders", False))),
+        neg_risk=bool(row.get("negRisk", row.get("neg_risk", False))),
+        spread=spread,
+        description=str(row.get("description") or ""),
+        event_slug=str(row.get("eventSlug") or row.get("event_slug") or ""),
+        event_title=str(row.get("eventTitle") or row.get("event_title") or ""),
+    )
+    return PolymarketMarket(market=market, tokens=tokens, meta=meta, raw=row)
 
 
 def parse_clob_book(market_id: str, outcome: str, payload: dict[str, Any]) -> MarketSnapshot:
@@ -176,6 +256,27 @@ def parse_clob_book(market_id: str, outcome: str, payload: dict[str, Any]) -> Ma
         depth_bid_1pct=_depth_within(best_bid, bids, side="bid"),
         depth_ask_1pct=_depth_within(best_ask, asks, side="ask"),
     )
+
+
+def parse_price_history(market_id: str, outcome: str, payload: Any) -> tuple[MarketSnapshot, ...]:
+    rows = _price_history_rows(payload)
+    snapshots: list[MarketSnapshot] = []
+    for row in rows:
+        timestamp = _parse_history_timestamp(_first_present(row, ("t", "timestamp", "time", "date", "created_at")))
+        price = _parse_float(_first_present(row, ("p", "price", "last", "last_trade_price", "lastTradePrice")))
+        if timestamp is None or price is None:
+            continue
+        snapshots.append(
+            MarketSnapshot(
+                market_id=market_id,
+                outcome=outcome,
+                taken_at=timestamp,
+                best_bid=None,
+                best_ask=None,
+                last_trade_price=price,
+            )
+        )
+    return tuple(snapshots)
 
 
 def infer_market_type(question: str, row: dict[str, Any]) -> str:
@@ -208,6 +309,16 @@ def _parse_jsonish_list(value: Any) -> list[Any]:
     return []
 
 
+def _parse_jsonish_floats(value: Any) -> list[float]:
+    raw = _parse_jsonish_list(value)
+    result: list[float] = []
+    for item in raw:
+        f = _parse_float(item)
+        if f is not None:
+            result.append(f)
+    return result
+
+
 def _parse_optional_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -217,6 +328,42 @@ def _parse_optional_datetime(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_history_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        seconds = value / 1000 if value > 10_000_000_000 else value
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        numeric = _parse_float(stripped)
+        if numeric is not None:
+            return _parse_history_timestamp(numeric)
+        return _parse_optional_datetime(stripped)
+    return None
+
+
+def _price_history_rows(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("history", "prices", "data"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _first_present(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in row:
+            return row[key]
+    return None
 
 
 def _parse_orders(value: Any) -> list[tuple[float, float]]:

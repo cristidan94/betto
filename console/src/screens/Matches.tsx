@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
-import { ConsoleShell, type Screen } from '../components/ConsoleShell'
+import { ConsoleShell, type ScreenProps } from '../components/ConsoleShell'
 import { useApi } from '../hooks/useApi'
 import type { MatchesResponse, MatchEntry, MatchMarketsResponse, MarketEntry } from '../types/matches'
 
-export default function Matches({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+export default function Matches({ onNavigate, mode, onModeChange }: ScreenProps) {
   const { data, loading, error } = useApi<MatchesResponse>('/matches')
   const [sel, setSel] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
+  const shellProps = { mode, onModeChange }
 
   const matches = data?.matches ?? []
   const m = matches[sel]
@@ -32,7 +33,7 @@ export default function Matches({ onNavigate }: { onNavigate: (s: Screen) => voi
 
   if (loading) {
     return (
-      <ConsoleShell active="matches" onNavigate={onNavigate}>
+      <ConsoleShell active="matches" onNavigate={onNavigate} {...shellProps}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <span className="c-muted">Loading...</span>
         </div>
@@ -40,11 +41,38 @@ export default function Matches({ onNavigate }: { onNavigate: (s: Screen) => voi
     )
   }
 
-  if (error || !data || !m) {
+  if (error || !data) {
     return (
-      <ConsoleShell active="matches" onNavigate={onNavigate}>
+      <ConsoleShell active="matches" onNavigate={onNavigate} {...shellProps}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <span className="c-neg">{error ?? 'Failed to load'}</span>
+        </div>
+      </ConsoleShell>
+    )
+  }
+
+  if (!m) {
+    return (
+      <ConsoleShell active="matches" onNavigate={onNavigate} {...shellProps}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid var(--rule)' }}>
+            <div className="col" style={{ gap: 2 }}>
+              <span className="eyebrow">{data.date} - same-match exposure view</span>
+              <h2 style={{ fontSize: 22, letterSpacing: '-0.01em', display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                Matches
+                <span className="num c-muted" style={{ fontSize: 14, fontWeight: 500 }}>0 scheduled - 0 markets</span>
+              </h2>
+            </div>
+          </div>
+          <div className="grow" style={{ display: 'grid', placeItems: 'center', padding: 24 }}>
+            <div className="card" style={{ width: 'min(520px, 100%)', padding: 18, textAlign: 'center' }}>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>schedule clear</div>
+              <h3 style={{ fontSize: 18, marginBottom: 6 }}>No matches loaded</h3>
+              <p className="c-muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                The app has no current match rows from the configured data source.
+              </p>
+            </div>
+          </div>
         </div>
       </ConsoleShell>
     )
@@ -55,14 +83,14 @@ export default function Matches({ onNavigate }: { onNavigate: (s: Screen) => voi
   ]
 
   return (
-    <ConsoleShell active="matches" onNavigate={onNavigate}>
+    <ConsoleShell active="matches" onNavigate={onNavigate} {...shellProps}>
       <div ref={rootRef} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 380px', height: '100%' }}>
         {/* schedule */}
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, borderRight: '1px solid var(--border)' }}>
           <div style={{ padding: '14px 18px 10px' }}>
             <div className="between" style={{ marginBottom: 8 }}>
               <div className="col" style={{ gap: 2 }}>
-                <span className="eyebrow">tuesday - may 16 - same-match exposure view</span>
+                <span className="eyebrow">{data.date} - same-match exposure view</span>
                 <h2 style={{ fontSize: 22, letterSpacing: '-0.01em', display: 'flex', alignItems: 'baseline', gap: 10 }}>
                   Matches
                   <span className="num c-muted" style={{ fontSize: 14, fontWeight: 500 }}>{matches.length} scheduled - {matches.reduce((s, x) => s + x.open_markets, 0)} markets</span>
@@ -232,11 +260,11 @@ export default function Matches({ onNavigate }: { onNavigate: (s: Screen) => voi
           <div className="col" style={{ gap: 8 }}>
             <span className="eyebrow">context</span>
             <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 12, rowGap: 4, fontSize: 12 }}>
-              <span className="c-muted">roster</span><span className="num">stable both sides</span>
-              <span className="c-muted">stand-ins</span><span className="num">none</span>
-              <span className="c-muted">timezone</span><span className="num">0h gap</span>
-              <span className="c-muted">schedule</span><span className="num">{m.id === 'PM-cs-2891' ? 'NAVI d2 - G2 d1' : 'first match'}</span>
-              <span className="c-muted">news - 24h</span><span className="num">none</span>
+              <span className="c-muted">roster</span><span className="num">unknown</span>
+              <span className="c-muted">stand-ins</span><span className="num">unknown</span>
+              <span className="c-muted">timezone</span><span className="num">unknown</span>
+              <span className="c-muted">schedule</span><span className="num">{m.start_in}</span>
+              <span className="c-muted">news - 24h</span><span className="num">unknown</span>
             </div>
           </div>
         </div>

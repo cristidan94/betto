@@ -1,11 +1,11 @@
-import { ConsoleShell, type Screen } from '../components/ConsoleShell'
+import { ConsoleShell, type ScreenProps } from '../components/ConsoleShell'
 import { Equity } from '../components/primitives'
 import { useApi } from '../hooks/useApi'
 import type { CapitalBucket, KillSwitch, RiskCap, RiskKpi, RiskResponse } from '../types/risk'
 
-function RiskState({ children, onNavigate, tone = 'muted' }: { children: string; onNavigate: (s: Screen) => void; tone?: 'muted' | 'neg' }) {
+function RiskState({ children, onNavigate, mode, onModeChange, tone = 'muted' }: ScreenProps & { children: string; tone?: 'muted' | 'neg' }) {
   return (
-    <ConsoleShell active="risk" onNavigate={onNavigate}>
+    <ConsoleShell active="risk" onNavigate={onNavigate} mode={mode} onModeChange={onModeChange}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
         <span className={tone === 'neg' ? 'c-neg' : 'c-muted'}>{children}</span>
       </div>
@@ -20,17 +20,34 @@ function toneColor(kind: string | null) {
   return 'var(--ink)'
 }
 
-export default function Risk({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+export default function Risk({ onNavigate, mode, onModeChange }: ScreenProps) {
   const { data, loading, error } = useApi<RiskResponse>('/risk')
+  const shellProps = { mode, onModeChange }
 
-  if (loading) return <RiskState onNavigate={onNavigate}>Loading...</RiskState>
-  if (error || !data) return <RiskState onNavigate={onNavigate} tone="neg">{error ?? 'Failed to load'}</RiskState>
+  if (loading) return <RiskState onNavigate={onNavigate} {...shellProps}>Loading...</RiskState>
+  if (error || !data) return <RiskState onNavigate={onNavigate} {...shellProps} tone="neg">{error ?? 'Failed to load'}</RiskState>
 
   const allocated = data.buckets.filter((bucket) => bucket.kind !== 'flat').reduce((sum, bucket) => sum + bucket.used, 0)
   const reserve = data.buckets.find((bucket) => bucket.kind === 'flat')?.used ?? Math.max(0, 100 - allocated)
 
+  if (data.kpis.length === 0 && data.buckets.length === 0 && data.caps.length === 0 && data.kill_switches.length === 0) {
+    return (
+      <ConsoleShell active="risk" onNavigate={onNavigate} {...shellProps}>
+        <div style={{ display: 'grid', placeItems: 'center', height: '100%', padding: 24 }}>
+          <div className="card" style={{ width: 'min(520px, 100%)', padding: 18, textAlign: 'center' }}>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>risk</div>
+            <h3 style={{ fontSize: 18, marginBottom: 6 }}>No risk data loaded</h3>
+            <p className="c-muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              Generate recommendations, bets, or risk summaries to populate this view.
+            </p>
+          </div>
+        </div>
+      </ConsoleShell>
+    )
+  }
+
   return (
-    <ConsoleShell active="risk" onNavigate={onNavigate}>
+    <ConsoleShell active="risk" onNavigate={onNavigate} {...shellProps}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ padding: '14px 18px 12px', borderBottom: '1px solid var(--border)' }}>
           <div className="between">

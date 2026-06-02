@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -9,7 +11,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from api.models.betlog import BetLogResponse, BetLogRow, BetLogSummary
-from api.models.ingestion import FeatureFreshness, IngestionResponse, IngestionSource
+from api.models.edge_comparison import EdgeComparisonEntry, EdgeComparisonResponse, SourceOddsEntry
+from api.models.ingestion import FeatureFreshness, IngestionJobRequest, IngestionJobResponse, IngestionJobStep, IngestionResponse, IngestionSource
 from api.models.matches import MatchEntry, MatchesResponse, MatchMarketsResponse, MarketEntry
 from api.models.recommendation import (
     Derivative,
@@ -29,6 +32,7 @@ from core.db import PostgresRepository
 from core.db.postgres import PostgresExecutor
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BANKROLL_USD = 24318.40
 DEFAULT_EXPOSURE_CAP_PCT = 30.0
 
@@ -52,10 +56,7 @@ def get_today_recommendations() -> TodayResponse:
 
 def get_recommendation(rec_id: str) -> RecommendationDetail:
     if not use_postgres_api():
-        fixture_path = FIXTURES / f"recommendation_{rec_id.replace('-', '_').lower()}.json"
-        if not fixture_path.exists():
-            raise HTTPException(status_code=404, detail=f"Recommendation {rec_id} not found")
-        return RecommendationDetail(**json.loads(fixture_path.read_text(encoding="utf-8-sig")))
+        raise HTTPException(status_code=404, detail="No local recommendations are available")
     with _repository() as repo:
         rows = repo.list_console_recommendations(identifier=rec_id, limit=1)
         if not rows:
@@ -71,7 +72,7 @@ def get_recommendation(rec_id: str) -> RecommendationDetail:
 
 def get_matches() -> MatchesResponse:
     if not use_postgres_api():
-        return MatchesResponse(**load_fixture("matches.json"))
+        return MatchesResponse(date=datetime.now(timezone.utc).date().isoformat(), matches=[])
     with _repository() as repo:
         rows = repo.list_console_matches(limit=50)
     today = datetime.now(timezone.utc).date().isoformat()
@@ -80,11 +81,7 @@ def get_matches() -> MatchesResponse:
 
 def get_match_markets(match_id: str) -> MatchMarketsResponse:
     if not use_postgres_api():
-        data = load_fixture("match_markets.json")
-        markets = data.get(match_id)
-        if markets is None:
-            raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
-        return MatchMarketsResponse(match_id=match_id, markets=[MarketEntry(**m) for m in markets])
+        raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
     with _repository() as repo:
         rows = repo.list_console_match_markets(match_id, limit=20)
     if not rows:
@@ -94,10 +91,15 @@ def get_match_markets(match_id: str) -> MatchMarketsResponse:
 
 def get_strategy(strategy_id: str) -> StrategyResponse:
     if not use_postgres_api():
-        fixture_path = FIXTURES / f"strategy_{strategy_id.replace('-', '_').lower()}.json"
-        if not fixture_path.exists():
-            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
-        return StrategyResponse(**json.loads(fixture_path.read_text(encoding="utf-8-sig")))
+        return StrategyResponse(
+            strategy_id=strategy_id,
+            name=_title_strategy(strategy_id),
+            version="none",
+            mode="paper",
+            enabled=False,
+            kpis=[],
+            settled=[],
+        )
     db_strategy_id = _strategy_id_for_db(strategy_id)
     with _repository() as repo:
         bet_summaries = repo.summarize_paper_bets(strategy_id=db_strategy_id)
@@ -108,7 +110,19 @@ def get_strategy(strategy_id: str) -> StrategyResponse:
 
 def get_bet_log() -> BetLogResponse:
     if not use_postgres_api():
-        return BetLogResponse(**load_fixture("bet_log.json"))
+        return BetLogResponse(
+            summary=BetLogSummary(
+                bets=0,
+                settled_bets=0,
+                open_bets=0,
+                stake_usd=0.0,
+                pnl_usd=0.0,
+                roi=0.0,
+                mean_clv=0.0,
+                hit_rate=0.0,
+            ),
+            rows=[],
+        )
     strategy_id = os.environ.get("BETTO_CONSOLE_STRATEGY_ID")
     with _repository() as repo:
         summaries = repo.summarize_paper_bets(strategy_id=strategy_id)
@@ -118,7 +132,14 @@ def get_bet_log() -> BetLogResponse:
 
 def get_ingestion() -> IngestionResponse:
     if not use_postgres_api():
-        return IngestionResponse(**load_fixture("ingestion.json"))
+        return IngestionResponse(
+            sources=[],
+            features=[],
+            snapshot_lag="unknown",
+            snapshot_count=0,
+            schemas_ok=False,
+            leakage_tests_ok=False,
+        )
     with _repository() as repo:
         raw = repo.summarize_raw_objects()
         features = repo.list_feature_summaries()
@@ -126,14 +147,293 @@ def get_ingestion() -> IngestionResponse:
     return _ingestion_response(raw, features, snapshots)
 
 
+def run_ingestion_job(req: IngestionJobRequest) -> IngestionJobResponse:
+    steps: list[IngestionJobStep] = []
+    for args in _ingestion_job_commands(req):
+        command = [sys.executable, "-m", "core.cli.main", *args]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                env=os.environ.copy(),
+                capture_output=True,
+                text=True,
+                timeout=max(30, min(req.timeout_sec, 1800)),
+            )
+            summary = _parse_job_summary(result.stdout)
+            steps.append(
+                IngestionJobStep(
+                    command=command,
+                    exit_code=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    summary=summary,
+                )
+            )
+            if result.returncode != 0:
+                break
+        except subprocess.TimeoutExpired as exc:
+            steps.append(
+                IngestionJobStep(
+                    command=command,
+                    exit_code=124,
+                    stdout=exc.stdout or "",
+                    stderr=exc.stderr or f"Timed out after {req.timeout_sec}s",
+                    summary=None,
+                )
+            )
+            break
+    return IngestionJobResponse(
+        action=req.action,
+        ok=bool(steps) and all(step.exit_code == 0 for step in steps),
+        steps=steps,
+    )
+
+
 def get_risk() -> RiskResponse:
     if not use_postgres_api():
-        return RiskResponse(**load_fixture("risk.json"))
+        return RiskResponse(kpis=[], buckets=[], caps=[], kill_switches=[])
     strategy_id = os.environ.get("BETTO_CONSOLE_STRATEGY_ID")
     with _repository() as repo:
         rec_summaries = repo.list_recommendation_summaries(strategy_id=strategy_id)
         bet_summaries = repo.summarize_paper_bets(strategy_id=strategy_id)
     return _risk_response(rec_summaries, bet_summaries)
+
+
+def get_edge_comparison() -> EdgeComparisonResponse:
+    today = datetime.now(timezone.utc).date().isoformat()
+    if not use_postgres_api():
+        return EdgeComparisonResponse(
+            date=today,
+            comparisons=_fixture_edge_comparisons(),
+            markets_with_both_sources=0,
+            total_markets=0,
+        )
+    with _repository() as repo:
+        rows = repo.list_edge_comparison_rows(limit=50)
+    comparisons = [_edge_comparison_entry(r) for r in rows]
+    both = sum(1 for c in comparisons if c.polymarket_prob is not None and c.oddspapi_prob is not None)
+    return EdgeComparisonResponse(
+        date=today,
+        comparisons=comparisons,
+        markets_with_both_sources=both,
+        total_markets=len(comparisons),
+    )
+
+
+def _fixture_edge_comparisons() -> list[EdgeComparisonEntry]:
+    try:
+        data = load_fixture("edge_comparison.json")
+        return [EdgeComparisonEntry(**row) for row in data.get("comparisons", [])]
+    except FileNotFoundError:
+        return []
+
+
+def _ingestion_job_commands(req: IngestionJobRequest) -> list[list[str]]:
+    limit = str(max(1, min(req.limit, 1000)))
+    max_pages = str(max(1, min(req.max_pages, 50)))
+    actions: dict[str, list[list[str]]] = {
+        "migrate": [["db-apply-migrations"]],
+        "polymarket-cs": [
+            ["db-ingest-polymarket-cs", "--limit", limit, *(_flag(req.include_closed, "--include-closed"))],
+        ],
+        "polymarket-closed": [
+            ["db-backfill-polymarket-cs-closed", "--limit", limit, "--max-pages", max_pages],
+        ],
+        "polymarket-price-history": [
+            ["db-ingest-polymarket-price-history", "--limit", limit, *(_flag(req.closed_only, "--closed-only"))],
+        ],
+        "polymarket-account-history": [
+            ["db-ingest-polymarket-account-history", "--limit", limit, "--max-pages", max_pages, *(_flag(req.include_trades, "--include-trades"))],
+        ],
+        "polymarket-reconcile": [
+            ["db-reconcile-polymarket-settlements"],
+        ],
+        "polymarket-full-refresh": [
+            ["db-ingest-polymarket-cs", "--limit", limit, "--include-closed"],
+            ["db-backfill-polymarket-cs-closed", "--limit", limit, "--max-pages", max_pages],
+            ["db-ingest-polymarket-price-history", "--limit", limit, "--closed-only"],
+            ["db-ingest-polymarket-account-history", "--limit", limit, "--max-pages", max_pages, *(_flag(req.include_trades, "--include-trades"))],
+            ["db-reconcile-polymarket-settlements"],
+        ],
+    }
+    if req.action not in actions:
+        raise HTTPException(status_code=400, detail=f"Unknown ingestion action: {req.action}")
+    return actions[req.action]
+
+
+def _flag(enabled: bool, name: str) -> list[str]:
+    return [name] if enabled else []
+
+
+def _parse_job_summary(stdout: str) -> Any | None:
+    text = stdout.strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _edge_comparison_entry(row: dict[str, Any]) -> EdgeComparisonEntry:
+    sources: list[SourceOddsEntry] = []
+    pm_prob = row.get("pm_prob")
+    odds_prob = row.get("odds_prob")
+    model_prob = row.get("model_prob")
+    if pm_prob is not None:
+        sources.append(SourceOddsEntry(source="polymarket", prob=pm_prob, best_bid=row.get("pm_bid"), best_ask=row.get("pm_ask")))
+    if odds_prob is not None:
+        sources.append(SourceOddsEntry(source="oddspapi", prob=odds_prob, bookmaker=row.get("odds_bookmaker")))
+
+    edge_pm = round(model_prob - pm_prob, 6) if model_prob is not None and pm_prob is not None else None
+    edge_odds = round(model_prob - odds_prob, 6) if model_prob is not None and odds_prob is not None else None
+    edge_diff = round(edge_pm - edge_odds, 6) if edge_pm is not None and edge_odds is not None else None
+
+    return EdgeComparisonEntry(
+        contest_id=row.get("contest_id", ""),
+        match=row.get("match_label", ""),
+        market_type=row.get("market_type", ""),
+        outcome=row.get("outcome", ""),
+        model_prob=model_prob,
+        polymarket_prob=pm_prob,
+        polymarket_volume=row.get("pm_volume"),
+        oddspapi_prob=odds_prob,
+        oddspapi_bookmaker=row.get("odds_bookmaker"),
+        edge_vs_polymarket=edge_pm,
+        edge_vs_oddspapi=edge_odds,
+        edge_diff=edge_diff,
+        sources=sources,
+    )
+
+
+def place_bet(req: Any) -> dict[str, Any]:
+    from core.edge import Recommendation
+    from core.execution import BetMode, ExecutionService
+    from core.markets import MarketSnapshot
+
+    settings = load_settings()
+    mode = BetMode(req.mode)
+    placed_at = datetime.now(timezone.utc)
+
+    order_client = None
+    if mode == BetMode.LIVE:
+        if not settings.polymarket_credentials_configured:
+            return {
+                "success": False, "order_id": "", "mode": mode.value,
+                "market_id": req.market_id, "outcome": req.outcome,
+                "size_usd": 0.0, "fill_price": None,
+                "error": "Polymarket credentials not configured",
+            }
+        from sports.cs.ingestion import PolymarketOrderClient
+        order_client = PolymarketOrderClient(
+            clob_url=settings.polymarket_clob_url,
+            api_key=settings.polymarket_api_key,
+            api_secret=settings.polymarket_api_secret,
+            api_passphrase=settings.polymarket_api_passphrase,
+            private_key=settings.polymarket_private_key,
+            chain_id=settings.polymarket_chain_id,
+            address=settings.polymarket_address,
+        )
+
+    svc = ExecutionService(
+        mode=mode,
+        order_client=order_client,
+        bankroll_usd=DEFAULT_BANKROLL_USD,
+    )
+
+    rec = Recommendation(
+        market_id=req.market_id,
+        outcome=req.outcome,
+        taken_at=placed_at,
+        model_prob=req.model_prob,
+        market_prob=req.market_prob,
+        edge=req.model_prob - req.market_prob,
+        bankroll_fraction=req.size_fraction,
+        passes_filter=True,
+        reason="api_bet",
+    )
+    snap = MarketSnapshot(
+        market_id=req.market_id,
+        outcome=req.outcome,
+        taken_at=placed_at,
+        best_bid=max(0.01, req.market_prob - 0.01),
+        best_ask=min(0.99, req.market_prob + 0.01),
+        last_trade_price=req.market_prob,
+        depth_bid_1pct=None,
+        depth_ask_1pct=None,
+    )
+
+    result = svc.execute_recommendation(rec, snap, token_id=req.token_id or None)
+    if result.success and use_postgres_api():
+        _persist_execution_result(req, result.to_dict(), placed_at)
+    return result.to_dict()
+
+
+def _persist_execution_result(req: Any, result: dict[str, Any], placed_at: datetime) -> None:
+    strategy_id = getattr(req, "strategy_id", None) or os.environ.get("BETTO_CONSOLE_STRATEGY_ID") or "api_execution"
+    fill_price = result.get("fill_price")
+    with _repository() as repo:
+        bet_id = repo.insert_execution_bet(
+            market_id=req.market_id,
+            outcome=req.outcome,
+            placed_at=placed_at,
+            model_prob=req.model_prob,
+            market_prob=req.market_prob,
+            edge=req.model_prob - req.market_prob,
+            kelly_fraction=req.size_fraction,
+            stake_usd=float(result.get("size_usd") or 0.0),
+            price_in=float(fill_price) if fill_price is not None else None,
+            strategy_id=strategy_id,
+            mode=str(result.get("mode") or req.mode),
+        )
+        repo.insert_order(
+            order_id=str(result["order_id"]),
+            bet_id=bet_id,
+            market_id=req.market_id,
+            outcome=req.outcome,
+            mode=str(result.get("mode") or req.mode),
+            side=str(result.get("side") or "buy"),
+            size_usd=float(result.get("size_usd") or 0.0),
+            fill_price=float(fill_price) if fill_price is not None else None,
+            order_status="filled" if fill_price is not None else "open",
+            token_id=req.token_id or None,
+            polymarket_order_id=str(result["order_id"]) if str(result.get("mode")) == "live" else None,
+        )
+
+
+def cancel_bet(order_id: str) -> dict[str, Any]:
+    settings = load_settings()
+    cancelled = False
+    if not settings.polymarket_credentials_configured:
+        if use_postgres_api():
+            with _repository() as repo:
+                repo.mark_order_cancelled(order_id)
+            return {"cancelled": True, "order_id": order_id}
+        return {"cancelled": False, "order_id": order_id}
+
+    from sports.cs.ingestion import PolymarketOrderClient
+    client = PolymarketOrderClient(
+        clob_url=settings.polymarket_clob_url,
+        api_key=settings.polymarket_api_key,
+        api_secret=settings.polymarket_api_secret,
+        api_passphrase=settings.polymarket_api_passphrase,
+        private_key=settings.polymarket_private_key,
+        chain_id=settings.polymarket_chain_id,
+        address=settings.polymarket_address,
+    )
+    cancelled = client.cancel_order(order_id)
+    if cancelled and use_postgres_api():
+        with _repository() as repo:
+            repo.mark_order_cancelled(order_id)
+    return {"cancelled": cancelled, "order_id": order_id}
+
+
+def get_orders() -> list[dict[str, Any]]:
+    if not use_postgres_api():
+        return []
+    with _repository() as repo:
+        return repo.list_orders(limit=100)
 
 
 class _RepositoryContext:
@@ -305,7 +605,7 @@ def _bet_log_row(row: dict[str, Any]) -> BetLogRow:
         edge=float(row.get("edge") or 0.0),
         size=float(row.get("kelly_fraction") or 0.0),
         stake_usd=float(row.get("stake_usd") or 0.0),
-        mode="paper",
+        mode=str(row.get("mode") or "paper"),
         state="settled" if row.get("resolved_outcome") is not None else "open",
         result=_bet_result(row),
         clv=float(row["clv"]) if row.get("clv") is not None else None,
@@ -317,6 +617,8 @@ def _today_recommendation(row: dict[str, Any], seed: int) -> TodayRecommendation
     size = float(row["bankroll_fraction"] or 0.0)
     return TodayRecommendation(
         id=str(row["market_id"]),
+        outcome=str(row.get("outcome") or ""),
+        token_id=_token_id_for_outcome(row),
         match=_match_label(row),
         market=_market_label(row),
         model_prob=float(row["model_prob"] or 0.0),
@@ -330,6 +632,25 @@ def _today_recommendation(row: dict[str, Any], seed: int) -> TodayRecommendation
         correlation=Correlation(used=round(size * 100, 2), cap=5.0),
         seed=seed,
     )
+
+
+def _token_id_for_outcome(row: dict[str, Any]) -> str | None:
+    token_id = row.get("token_id") or row.get("polymarket_token_id")
+    if token_id:
+        return str(token_id)
+    meta = row.get("polymarket_meta")
+    if not isinstance(meta, dict):
+        return None
+    tokens = meta.get("tokens")
+    if not isinstance(tokens, list):
+        return None
+    outcome = str(row.get("outcome") or "").lower()
+    for token in tokens:
+        if not isinstance(token, dict):
+            continue
+        if str(token.get("outcome") or "").lower() == outcome and token.get("token_id"):
+            return str(token["token_id"])
+    return None
 
 
 def _recommendation_detail_from_row(

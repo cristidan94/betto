@@ -1,11 +1,11 @@
-import { ConsoleShell, type Screen } from '../components/ConsoleShell'
+import { ConsoleShell, type ScreenProps } from '../components/ConsoleShell'
 import { Equity } from '../components/primitives'
 import { useApi } from '../hooks/useApi'
 import type { SettledBet, StrategyResponse } from '../types/strategy'
 
-function StrategyState({ children, onNavigate, tone = 'muted' }: { children: string; onNavigate: (s: Screen) => void; tone?: 'muted' | 'neg' }) {
+function StrategyState({ children, onNavigate, mode, onModeChange, tone = 'muted' }: ScreenProps & { children: string; tone?: 'muted' | 'neg' }) {
   return (
-    <ConsoleShell active="strats" onNavigate={onNavigate}>
+    <ConsoleShell active="strats" onNavigate={onNavigate} mode={mode} onModeChange={onModeChange}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
         <span className={tone === 'neg' ? 'c-neg' : 'c-muted'}>{children}</span>
       </div>
@@ -13,11 +13,12 @@ function StrategyState({ children, onNavigate, tone = 'muted' }: { children: str
   )
 }
 
-export default function Strategies({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+export default function Strategies({ onNavigate, mode, onModeChange }: ScreenProps) {
   const { data, loading, error } = useApi<StrategyResponse>('/strategies/map-winner')
+  const shellProps = { mode, onModeChange }
 
-  if (loading) return <StrategyState onNavigate={onNavigate}>Loading...</StrategyState>
-  if (error || !data) return <StrategyState onNavigate={onNavigate} tone="neg">{error ?? 'Failed to load'}</StrategyState>
+  if (loading) return <StrategyState onNavigate={onNavigate} {...shellProps}>Loading...</StrategyState>
+  if (error || !data) return <StrategyState onNavigate={onNavigate} {...shellProps} tone="neg">{error ?? 'Failed to load'}</StrategyState>
 
   const settled = data.settled
   const accepted = data.kpis.find((k) => k.label.toLowerCase() === 'accepted')?.value ?? '0'
@@ -25,8 +26,24 @@ export default function Strategies({ onNavigate }: { onNavigate: (s: Screen) => 
   const clv = data.kpis.find((k) => k.label.toLowerCase().includes('clv'))?.value ?? '0.0%'
   const capital = data.kpis.find((k) => k.label.toLowerCase().includes('capital'))?.value ?? '0.0%'
 
+  if (!data.enabled && data.kpis.length === 0 && settled.length === 0) {
+    return (
+      <ConsoleShell active="strats" onNavigate={onNavigate} {...shellProps}>
+        <div style={{ display: 'grid', placeItems: 'center', height: '100%', padding: 24 }}>
+          <div className="card" style={{ width: 'min(520px, 100%)', padding: 18, textAlign: 'center' }}>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>strategies</div>
+            <h3 style={{ fontSize: 18, marginBottom: 6 }}>No strategy data loaded</h3>
+            <p className="c-muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              Connect Postgres or generate strategy summaries to populate this view.
+            </p>
+          </div>
+        </div>
+      </ConsoleShell>
+    )
+  }
+
   return (
-    <ConsoleShell active="strats" onNavigate={onNavigate} crumb={
+    <ConsoleShell active="strats" onNavigate={onNavigate} {...shellProps} crumb={
       <>
         <span>Strategies</span>
         <span style={{ color: 'var(--dim)' }}>/</span>

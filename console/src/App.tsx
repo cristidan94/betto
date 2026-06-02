@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import type { Screen } from './components/ConsoleShell'
+import type { Screen, BetMode } from './components/ConsoleShell'
 import Today from './screens/Today'
 import Recommendation from './screens/Recommendation'
 import Matches from './screens/Matches'
@@ -8,6 +8,7 @@ import Backtests from './screens/Backtests'
 import Ingestion from './screens/Ingestion'
 import BetLog from './screens/BetLog'
 import Risk from './screens/Risk'
+import EdgeComparison from './screens/EdgeComparison'
 
 const SCREEN_KEYS: Record<string, Screen> = {
   '1': 'today',
@@ -18,10 +19,12 @@ const SCREEN_KEYS: Record<string, Screen> = {
   '6': 'ingest',
   '7': 'log',
   '8': 'risk',
+  '9': 'edge',
 }
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('today')
+  const [mode, setMode] = useState<BetMode>('paper')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -37,16 +40,19 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const shellProps = { onNavigate: setScreen, mode, onModeChange: setMode }
+
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
-      {screen === 'today' && <Today onNavigate={setScreen} />}
-      {screen === 'recs' && <Recommendation onNavigate={setScreen} />}
-      {screen === 'matches' && <Matches onNavigate={setScreen} />}
-      {screen === 'strats' && <Strategies onNavigate={setScreen} />}
-      {screen === 'backtest' && <Backtests onNavigate={setScreen} />}
-      {screen === 'ingest' && <Ingestion onNavigate={setScreen} />}
-      {screen === 'log' && <BetLog onNavigate={setScreen} />}
-      {screen === 'risk' && <Risk onNavigate={setScreen} />}
+      {screen === 'today' && <Today {...shellProps} />}
+      {screen === 'recs' && <Recommendation {...shellProps} />}
+      {screen === 'matches' && <Matches {...shellProps} />}
+      {screen === 'strats' && <Strategies {...shellProps} />}
+      {screen === 'backtest' && <Backtests {...shellProps} />}
+      {screen === 'ingest' && <Ingestion {...shellProps} />}
+      {screen === 'log' && <BetLog {...shellProps} />}
+      {screen === 'risk' && <Risk {...shellProps} />}
+      {screen === 'edge' && <EdgeComparison {...shellProps} />}
     </div>
   )
 }

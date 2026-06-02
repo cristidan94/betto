@@ -1,7 +1,25 @@
-import { ConsoleShell, type Screen } from '../components/ConsoleShell'
+import { useState } from 'react'
+import { cancelBet } from '../api'
+import { ConsoleShell, type ScreenProps } from '../components/ConsoleShell'
 import { Spark } from '../components/primitives'
 import { useApi } from '../hooks/useApi'
 import type { BetLogResponse, BetLogRow } from '../types/betlog'
+
+interface OrderEntry {
+  order_id: string
+  market_id: string
+  outcome: string
+  mode: string
+  side: string
+  fill_price: number | null
+  size_usd: number
+  order_status: string
+  created_at: string
+}
+
+interface OrdersResponse {
+  orders: OrderEntry[]
+}
 
 function money(value: number) {
   const sign = value >= 0 ? '+' : '-'
@@ -13,12 +31,16 @@ function pct(value: number) {
   return `${sign}${(value * 100).toFixed(1)}%`
 }
 
-export default function BetLog({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+export default function BetLog({ onNavigate, mode, onModeChange }: ScreenProps) {
   const { data, loading, error } = useApi<BetLogResponse>('/bets')
+  const { data: ordersData } = useApi<OrdersResponse>('/orders')
+  const [cancelledIds, setCancelledIds] = useState<Set<string>>(() => new Set())
+  const [cancelError, setCancelError] = useState<string>('')
+  const shellProps = { mode, onModeChange }
 
   if (loading) {
     return (
-      <ConsoleShell active="log" onNavigate={onNavigate}>
+      <ConsoleShell active="log" onNavigate={onNavigate} {...shellProps}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <span className="c-muted">Loading...</span>
         </div>
@@ -28,7 +50,7 @@ export default function BetLog({ onNavigate }: { onNavigate: (s: Screen) => void
 
   if (error || !data) {
     return (
-      <ConsoleShell active="log" onNavigate={onNavigate}>
+      <ConsoleShell active="log" onNavigate={onNavigate} {...shellProps}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <span className="c-neg">{error ?? 'Failed to load'}</span>
         </div>
@@ -37,9 +59,41 @@ export default function BetLog({ onNavigate }: { onNavigate: (s: Screen) => void
   }
 
   const { summary, rows } = data
+  const orders = ordersData?.orders ?? []
+  const visibleOrders = orders.slice(0, 8)
+
+  const cancelOrder = async (orderId: string) => {
+    setCancelError('')
+    try {
+      const result = await cancelBet(orderId)
+      if (result.cancelled) {
+        setCancelledIds((current) => new Set(current).add(orderId))
+      } else {
+        setCancelError(`Cancel rejected for ${orderId}`)
+      }
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Cancel request failed')
+    }
+  }
+
+  if (summary.bets === 0 && rows.length === 0 && orders.length === 0) {
+    return (
+      <ConsoleShell active="log" onNavigate={onNavigate} {...shellProps}>
+        <div style={{ display: 'grid', placeItems: 'center', height: '100%', padding: 24 }}>
+          <div className="card" style={{ width: 'min(520px, 100%)', padding: 18, textAlign: 'center' }}>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>bet log</div>
+            <h3 style={{ fontSize: 18, marginBottom: 6 }}>No bets loaded</h3>
+            <p className="c-muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              Paper or live bets will appear here after they are generated.
+            </p>
+          </div>
+        </div>
+      </ConsoleShell>
+    )
+  }
 
   return (
-    <ConsoleShell active="log" onNavigate={onNavigate}>
+    <ConsoleShell active="log" onNavigate={onNavigate} {...shellProps}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ padding: '14px 18px 12px', borderBottom: '1px solid var(--border)' }}>
           <div className="between" style={{ marginBottom: 10 }}>
@@ -79,6 +133,69 @@ export default function BetLog({ onNavigate }: { onNavigate: (s: Screen) => void
             </div>
           </div>
         </div>
+
+        {visibleOrders.length > 0 && (
+          <div style={{ padding: '10px 18px', borderBottom: '1px solid var(--rule)', background: 'var(--surf)' }}>
+            <div className="between" style={{ marginBottom: 8 }}>
+              <span className="eyebrow">orders - {orders.length}</span>
+              {cancelError && <span className="c-neg" style={{ fontSize: 11.5 }}>{cancelError}</span>}
+            </div>
+            <table className="tbl" style={{ tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: 120 }} />
+                <col />
+                <col style={{ width: 74 }} />
+                <col style={{ width: 74 }} />
+                <col style={{ width: 76 }} />
+                <col style={{ width: 80 }} />
+                <col style={{ width: 82 }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>order</th>
+                  <th>market</th>
+                  <th>mode</th>
+                  <th>side</th>
+                  <th className="num">stake</th>
+                  <th>status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleOrders.map((order) => {
+                  const status = cancelledIds.has(order.order_id) ? 'cancelled' : order.order_status
+                  const cancellable = ['pending', 'open', 'partial'].includes(status)
+                  return (
+                    <tr key={order.order_id} className="tbl-row" style={{ height: 28 }}>
+                      <td className="num c-muted" style={{ fontSize: 10.5 }}>{order.order_id}</td>
+                      <td>
+                        <div className="col" style={{ gap: 1 }}>
+                          <span style={{ fontSize: 12 }}>{order.market_id}</span>
+                          <span className="c-muted" style={{ fontSize: 10.5 }}>{order.outcome}</span>
+                        </div>
+                      </td>
+                      <td><span className={order.mode === 'live' ? 'badge neg' : 'badge'}>{order.mode}</span></td>
+                      <td className="num">{order.side}</td>
+                      <td className="num">${order.size_usd.toFixed(2)}</td>
+                      <td><span className="badge">{status}</span></td>
+                      <td>
+                        {cancellable && (
+                          <button
+                            className="chip warn"
+                            onClick={() => void cancelOrder(order.order_id)}
+                            style={{ height: 22, padding: '0 8px', fontSize: 11 }}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="grow" style={{ overflow: 'auto' }}>
           <table className="tbl" style={{ tableLayout: 'fixed' }}>

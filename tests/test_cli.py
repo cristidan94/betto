@@ -95,6 +95,7 @@ class CliTests(unittest.TestCase):
             out_dir = Path(tmp) / "fixtures"
             raw_dir.mkdir()
             (raw_dir / "2371234.json").write_text(json.dumps({"hltv_id": "2371234"}), encoding="utf-8")
+            (raw_dir / "manifest.json").write_text(json.dumps({"files": ["2371234.json"]}), encoding="utf-8")
             stdout = io.StringIO()
 
             with redirect_stdout(stdout):
@@ -103,10 +104,12 @@ class CliTests(unittest.TestCase):
             output = stdout.getvalue()
             payload = json.loads(output[output.rfind("\n{") + 1 :])
             imported_path_exists = (out_dir / "2371234.json").exists()
+            manifest_path_exists = (out_dir / "manifest.json").exists()
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["imported"], 1)
         self.assertTrue(imported_path_exists)
+        self.assertFalse(manifest_path_exists)
 
     def test_db_ingest_hltv_scraped_help_is_registered(self) -> None:
         stdout = io.StringIO()
@@ -125,7 +128,8 @@ class CliTests(unittest.TestCase):
             scraped_dir = root / "scraped"
             scraped_dir.mkdir()
             sample = Path("tests/fixtures/hltv_scraped_sample.json")
-            (scraped_dir / "2394722.json").write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
+            (scraped_dir / "2349691.json").write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
+            (scraped_dir / "manifest.json").write_text(json.dumps({"files": ["2349691.json"]}), encoding="utf-8")
             db = FakeCliDb()
             stdout = io.StringIO()
 
@@ -138,9 +142,12 @@ class CliTests(unittest.TestCase):
             stats_index = next(index for index, sql in enumerate(sql_calls) if "INSERT INTO cs_player_map_stats" in sql)
 
         self.assertEqual(code, 0)
+        self.assertEqual(payload["fixtures_found"], 1)
         self.assertEqual(payload["ingested"], 1)
-        self.assertEqual(payload["participants_upserted"], 4)
-        self.assertEqual(payload["player_stats_upserted"], 2)
+        self.assertEqual(payload["failed"], 0)
+        self.assertEqual(payload["participants_upserted"], 12)
+        self.assertEqual(payload["lineups_upserted"], 10)
+        self.assertEqual(payload["player_stats_upserted"], 10)
         self.assertGreater(raw_index, stats_index)
         self.assertTrue(any(sql.startswith("SAVEPOINT") for sql in sql_calls))
         self.assertTrue(any(sql.startswith("RELEASE SAVEPOINT") for sql in sql_calls))
@@ -151,7 +158,7 @@ class CliTests(unittest.TestCase):
             scraped_dir = root / "scraped"
             scraped_dir.mkdir()
             sample = Path("tests/fixtures/hltv_scraped_sample.json")
-            (scraped_dir / "2394722.json").write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
+            (scraped_dir / "2349691.json").write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
             db = FakeCliDb(fail_on="INSERT INTO cs_map_results")
             stdout = io.StringIO()
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import betlog, ingestion, matches, recommendation, risk, strategy, today
+from api.routers import betlog, bets, edge_comparison, ingestion, matches, recommendation, risk, strategy, today
 
 app = FastAPI(title="betto API", version="0.1.0")
 
@@ -19,3 +19,5 @@ app.include_router(strategy.router, prefix="/api")
 app.include_router(betlog.router, prefix="/api")
 app.include_router(ingestion.router, prefix="/api")
 app.include_router(risk.router, prefix="/api")
+app.include_router(edge_comparison.router, prefix="/api")
+app.include_router(bets.router, prefix="/api")

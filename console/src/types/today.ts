@@ -5,6 +5,8 @@ export interface Correlation {
 
 export interface TodayRecommendation {
   id: string
+  outcome?: string
+  token_id?: string | null
   match: string
   market: string
   model_prob: number

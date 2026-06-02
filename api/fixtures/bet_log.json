@@ -1,42 +1,13 @@
 {
   "summary": {
-    "bets": 142,
-    "settled_bets": 98,
-    "open_bets": 44,
-    "stake_usd": 14820.0,
-    "pnl_usd": 478.2,
-    "roi": 0.032,
-    "mean_clv": 0.018,
-    "hit_rate": 0.528
+    "bets": 0,
+    "settled_bets": 0,
+    "open_bets": 0,
+    "stake_usd": 0,
+    "pnl_usd": 0,
+    "roi": 0,
+    "mean_clv": 0,
+    "hit_rate": 0
   },
-  "rows": [
-    {
-      "timestamp": "may 16 09:41",
-      "id": "PM-cs-2891",
-      "market": "NAVI vs G2 - NAVI ML",
-      "model_market": "0.583 / 0.516",
-      "edge": 0.067,
-      "size": 0.018,
-      "stake_usd": 437.73,
-      "mode": "paper",
-      "state": "open",
-      "result": "-",
-      "clv": null,
-      "strategy": "map-winner v1"
-    },
-    {
-      "timestamp": "may 16 09:31",
-      "id": "PM-cs-2820",
-      "market": "VIT vs SPR - Map 2",
-      "model_market": "0.541 / 0.500",
-      "edge": 0.041,
-      "size": 0.011,
-      "stake_usd": 268.4,
-      "mode": "paper",
-      "state": "settled",
-      "result": "W",
-      "clv": 0.041,
-      "strategy": "map-winner v1"
-    }
-  ]
+  "rows": []
 }

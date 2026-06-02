@@ -101,12 +101,46 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("INSERT INTO raw_objects", db.calls[0][0])
         self.assertIn("INSERT INTO markets", db.calls[1][0])
         self.assertIn("INSERT INTO market_snapshots", db.calls[2][0])
+        self.assertIn("ON CONFLICT (market_id, outcome, taken_at) DO NOTHING", db.calls[2][0])
         self.assertIn("UPDATE markets", db.calls[3][0])
         self.assertIn("INSERT INTO participants", db.calls[4][0])
         self.assertIn("INSERT INTO data_snapshots", db.calls[8][0])
         self.assertIn("INSERT INTO feature_values", db.calls[9][0])
         self.assertIn("INSERT INTO model_artifacts", db.calls[10][0])
         self.assertIn("INSERT INTO recommendations", db.calls[11][0])
+
+    def test_updates_polymarket_meta(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+
+        repo.update_market_polymarket_meta(
+            "pm-1",
+            {"volume_usd": 1200.0, "tokens": [{"token_id": "tok-yes", "outcome": "Yes"}]},
+            "Market description",
+        )
+
+        sql, params = db.calls[0]
+
+        self.assertIn("UPDATE markets", sql)
+        self.assertIn("polymarket_meta", sql)
+        self.assertIn("description", sql)
+        self.assertEqual(params[1], "Market description")
+        self.assertEqual(params[2], "pm-1")
+
+    def test_lists_polymarket_tokens_for_price_history(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+
+        repo.list_polymarket_tokens_for_price_history(limit=7, closed_only=True)
+
+        sql, params = db.calls[0]
+
+        self.assertIn("jsonb_array_elements", sql)
+        self.assertIn("m.source = 'polymarket'", sql)
+        self.assertIn("token->>'token_id' IS NOT NULL", sql)
+        self.assertIn("m.resolved_outcome IS NOT NULL", sql)
+        self.assertIn("polymarket_meta->>'closed'", sql)
+        self.assertEqual(params, (7,))
 
     def test_lists_feature_summaries_with_filters(self) -> None:
         db = FakeDb()
@@ -317,6 +351,122 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("FROM bets", list_sql)
         self.assertIn("WHERE strategy_id = %s", list_sql)
         self.assertEqual(list_params, ("strategy-1", 5))
+
+    def test_inserts_execution_bet_and_order(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+        now = datetime.now(timezone.utc)
+
+        repo.insert_execution_bet(
+            market_id="m1",
+            outcome="Yes",
+            placed_at=now,
+            model_prob=0.58,
+            market_prob=0.52,
+            edge=0.06,
+            kelly_fraction=0.02,
+            stake_usd=20.0,
+            price_in=0.53,
+            strategy_id="api_execution",
+            mode="paper",
+        )
+        repo.insert_order(
+            order_id="paper-1",
+            bet_id=1,
+            market_id="m1",
+            outcome="Yes",
+            mode="paper",
+            side="buy",
+            size_usd=20.0,
+            fill_price=0.53,
+            order_status="filled",
+        )
+
+        bet_sql, bet_params = db.calls[0]
+        order_sql, order_params = db.calls[1]
+
+        self.assertIn("INSERT INTO bets", bet_sql)
+        self.assertIn("RETURNING bet_id", bet_sql)
+        self.assertEqual(bet_params[-1], "paper")
+        self.assertIn("INSERT INTO orders", order_sql)
+        self.assertEqual(order_params[0], "paper-1")
+        self.assertEqual(order_params[9], "filled")
+
+    def test_lists_and_cancels_orders(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+
+        repo.list_orders(market_id="m1", limit=3)
+        repo.mark_order_cancelled("paper-1")
+
+        list_sql, list_params = db.calls[0]
+        cancel_sql, cancel_params = db.calls[1]
+
+        self.assertIn("FROM orders", list_sql)
+        self.assertIn("WHERE market_id = %s", list_sql)
+        self.assertEqual(list_params, ("m1", 3))
+        self.assertIn("order_status = 'cancelled'", cancel_sql)
+        self.assertEqual(cancel_params, ("paper-1", "paper-1"))
+
+    def test_reconciles_polymarket_trades_to_orders(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+
+        count = repo.reconcile_polymarket_trades_to_orders()
+
+        sql, params = db.calls[0]
+
+        self.assertEqual(count, 0)
+        self.assertIn("FROM polymarket_trades", sql)
+        self.assertIn("UPDATE orders", sql)
+        self.assertIn("fill_size_usd", sql)
+        self.assertIn("RETURNING o.order_id", sql)
+        self.assertEqual(params, ())
+
+    def test_settles_bets_from_polymarket_resolutions_with_strategy_filter(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+
+        count = repo.settle_bets_from_polymarket_resolutions(strategy_id="strategy-1")
+
+        sql, params = db.calls[0]
+
+        self.assertEqual(count, 0)
+        self.assertIn("JOIN markets m ON m.market_id = b.market_id", sql)
+        self.assertIn("m.source = 'polymarket'", sql)
+        self.assertIn("m.resolved_outcome IS NOT NULL", sql)
+        self.assertIn("b.price_in > 0", sql)
+        self.assertIn("AND b.strategy_id = %s", sql)
+        self.assertIn("pnl_usd = CASE", sql)
+        self.assertEqual(params, ("strategy-1",))
+
+    def test_upserts_polymarket_account_history(self) -> None:
+        db = FakeDb()
+        repo = PostgresRepository(db)
+
+        repo.upsert_polymarket_account_order({
+            "id": "order-1",
+            "market": "m1",
+            "asset_id": "token-1",
+            "side": "BUY",
+            "original_size": "12.5",
+            "size_matched": "3.5",
+            "price": "0.42",
+            "status": "ORDER_STATUS_LIVE",
+        })
+        repo.upsert_polymarket_trade({
+            "id": "trade-1",
+            "taker_order_id": "order-1",
+            "market": "m1",
+            "asset_id": "token-1",
+            "side": "BUY",
+            "size": "3.5",
+            "price": "0.42",
+            "status": "CONFIRMED",
+        })
+
+        self.assertIn("INSERT INTO polymarket_account_orders", db.calls[0][0])
+        self.assertIn("INSERT INTO polymarket_trades", db.calls[1][0])
 
     def test_updates_paper_bet_settlement_with_strategy_filter(self) -> None:
         db = FakeDb()

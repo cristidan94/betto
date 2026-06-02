@@ -29,10 +29,10 @@ fi
 # shellcheck disable=SC1091
 source .betto/wsl-venv/bin/activate
 
-if ! python -c "import psycopg" >/dev/null 2>&1; then
-  echo "[betto] Installing psycopg into WSL virtualenv"
+if ! python -c "import psycopg, fastapi, uvicorn, pydantic" >/dev/null 2>&1; then
+  echo "[betto] Installing Betto Python runtime dependencies into WSL virtualenv"
   python -m pip install --upgrade pip
-  python -m pip install "psycopg[binary]"
+  python -m pip install -e .
 fi
 
 if command -v pg_lsclusters >/dev/null 2>&1; then

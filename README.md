@@ -4,7 +4,65 @@ CS-first betting alpha research and recommendation platform.
 
 The codebase is organized around a reusable core platform plus game-specific plugins. Counter-Strike is the first plugin.
 
+## End Goal
+
+Betto is intended to become a CS2 betting research and execution console that can:
+
+- Ingest match, market, account, order, trade, and historical price data from live sources.
+- Normalize that data into a reusable Postgres-backed model for research, backtests, recommendations, paper betting, and live betting.
+- Compare model probabilities against Polymarket and bookmaker prices.
+- Recommend bets only when edge, liquidity, exposure, and risk checks pass.
+- Track every paper/live execution through order state, fills, settlement, PnL, CLV, ROI, and hit rate.
+- Give the operator a console for daily review, bet placement, cancellation, risk monitoring, and post-bet analysis.
+
+The near-term destination is a durable paper-to-live workflow: collect as much historical and live data as possible, prove the strategy with walk-forward and paper-bet evidence, then graduate carefully to live execution with full auditability.
+
+## Current Status
+
+The current build includes:
+
+- CS fixture normalization, feature materialization, baseline evaluation, walk-forward validation, paper evaluation, readiness checks, and reporting.
+- Polymarket CS market discovery from Gamma, CLOB order-book snapshots, enriched market metadata, and fuzzy linking to known CS contests.
+- DB-backed polling loops for ongoing Polymarket snapshots.
+- Closed/resolved Polymarket market backfill for settlement data.
+- Authenticated Polymarket account order/trade ingestion, so past orders and fills can be pulled when credentials are configured.
+- Historical Polymarket CLOB `/prices-history` ingestion for missed snapshot windows and CLV curves.
+- Durable `bets` and `orders` persistence for API-triggered paper/live executions.
+- Trade-to-order reconciliation and closed-market settlement reconciliation for realized PnL.
+- FastAPI endpoints and console screens for recommendations, matches, strategies, edge comparison, bet placement, bet log, order state, and cancellation.
+- Paper/Live mode toggle in the console, with live mode requiring explicit confirmation.
+
+The detailed Polymarket implementation log lives in `POLYMARKET_PROGRESS.md`.
+
+## Next Steps
+
+- Apply migrations and run the full DB verification workflow in WSL against the local Postgres database.
+- Run Polymarket closed-market backfill, account-history ingestion, and price-history ingestion with real credentials/network access.
+- Build a CLV and realized-PnL report joining `bets`, `orders`, `polymarket_trades`, market resolutions, and historical snapshots.
+- Improve the live execution path by switching to the official Polymarket SDK or a fully verified EIP-712 signing flow.
+- Add stronger liquidity/slippage checks before live order placement.
+- Add console views for CLV curves, settlement status, account history, and strategy readiness over real historical data.
+- Install `pytest` in the active Python environment or adjust the Kaggle tests so full `unittest discover` is clean without optional test dependencies.
+
 ## Quick Start
+
+Double-click:
+
+```text
+START_BETTO.cmd
+```
+
+or:
+
+```text
+start-betto-dev.cmd
+```
+
+The launcher prepares WSL/Postgres, applies migrations automatically, starts the FastAPI backend in Postgres mode, starts the Vite console, and opens the browser. Once the console is open, go to **Ingestion** to trigger market ingestion, closed-market backfill, price history, account history, reconciliation, or a full refresh from the UI.
+
+The CLI remains available as lower-level plumbing for debugging and automation, but it is not meant to be the normal operator workflow.
+
+Developer checks:
 
 ```powershell
 $py = 'C:\Users\crist\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
@@ -26,7 +84,7 @@ Or from an existing PowerShell session:
 .\scripts\start-betto-wsl.ps1
 ```
 
-The starter enters WSL at `/mnt/c/Users/crist/Desktop/betto`, creates/uses `.betto/wsl-venv`, installs `psycopg` in that venv if needed, starts the WSL Postgres cluster if it is down, exports:
+The starter enters WSL at `/mnt/c/Users/crist/Desktop/betto`, creates/uses `.betto/wsl-venv`, installs Betto Python runtime dependencies in that venv if needed, starts the WSL Postgres cluster if it is down, exports:
 
 ```text
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto
@@ -58,7 +116,7 @@ The non-interactive runner will not prompt for `sudo` by default. If the WSL Pos
 
 ## Console API Dev
 
-The first console screens are wired through FastAPI fixture endpoints. Run the API and Vite dev server in two terminals:
+For normal use, prefer `START_BETTO.cmd`. For manual frontend/API development, run the API and Vite dev server in two terminals:
 
 ```powershell
 $env:BETTO_API_PORT = '8000'
@@ -87,8 +145,13 @@ The current console endpoints are:
 - `GET /api/matches`
 - `GET /api/matches/{match_id}/markets`
 - `GET /api/strategies/{strategy_id}`
+- `GET /api/edge-comparison`
 - `GET /api/bets`
+- `POST /api/bets`
+- `GET /api/orders`
+- `DELETE /api/bets/{order_id}`
 - `GET /api/ingestion`
+- `POST /api/ingestion/jobs`
 - `GET /api/risk`
 
 ## Offline Evaluation Workflow
@@ -184,10 +247,13 @@ Artifacts written with `--write-artifact` or `--write-csv` land under `.betto\ar
 
 ## Live And Database Commands
 
+These commands are the internal pieces used by the launcher and UI. You normally do not need to run them by hand unless you are debugging, automating a batch job, or developing a new ingestion path.
+
 Live Polymarket polling requires network access:
 
 ```powershell
 & $py -m core.cli.main poll-polymarket-cs --limit 25
+& $py -m core.cli.main poll-polymarket-cs-loop --max-pages 10 --include-closed
 ```
 
 DB-backed ingestion requires a dedicated Betto Postgres database. After setting `BETTO_DATABASE_URL`, run:
@@ -196,6 +262,21 @@ DB-backed ingestion requires a dedicated Betto Postgres database. After setting 
 & $py -m core.cli.main db-check
 & $py -m core.cli.main db-apply-migrations
 & $py -m core.cli.main db-ingest-cs-fixture --path tests\fixtures\cs_match_001.json
+& $py -m core.cli.main db-ingest-polymarket-cs --limit 100 --include-closed
+& $py -m core.cli.main db-backfill-polymarket-cs-closed --limit 100 --max-pages 10
+& $py -m core.cli.main db-ingest-polymarket-price-history --limit 100 --closed-only
+```
+
+Authenticated Polymarket account history requires Polymarket API credentials and address settings. It is the main path for finding past orders/fills:
+
+```powershell
+$env:BETTO_POLYMARKET_API_KEY = '...'
+$env:BETTO_POLYMARKET_API_SECRET = '...'
+$env:BETTO_POLYMARKET_API_PASSPHRASE = '...'
+$env:BETTO_POLYMARKET_PRIVATE_KEY = '...'
+$env:BETTO_POLYMARKET_ADDRESS = '0x...'
+& $py -m core.cli.main db-ingest-polymarket-account-history --include-trades --max-pages 5
+& $py -m core.cli.main db-reconcile-polymarket-settlements
 ```
 
 When running inside WSL, the current local Postgres cluster listens on port `5433`:
@@ -205,6 +286,11 @@ source .betto/wsl-venv/bin/activate
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-check
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-apply-migrations
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-ingest-cs-fixture --path tests/fixtures/cs_match_001.json
+BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-ingest-polymarket-cs --limit 100 --include-closed
+BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-backfill-polymarket-cs-closed --limit 100 --max-pages 10
+BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-ingest-polymarket-price-history --limit 100 --closed-only
+BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-ingest-polymarket-account-history --include-trades --max-pages 5
+BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-reconcile-polymarket-settlements
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-materialize-cs-features --as-of 2026-05-21T00:00:00Z --fixtures tests/fixtures/cs_match_001.json
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-list-cs-features --limit 10
 BETTO_DATABASE_URL=postgresql://betto:betto@localhost:5433/betto python -m core.cli.main db-evaluate-cs-baseline --fixtures tests/fixtures/cs_match_001.json --write-artifact

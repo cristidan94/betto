@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.vendor import add_vendor_path
@@ -29,16 +30,13 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["summary"]["surfaced"], 14)
-        self.assertEqual(payload["recommendations"][0]["id"], "PM-cs-2891")
+        self.assertEqual(payload["summary"]["surfaced"], 0)
+        self.assertEqual(payload["recommendations"], [])
 
     def test_recommendation_detail_endpoint(self) -> None:
-        response = self.client.get("/api/recommendations/PM-cs-2891")
+        response = self.client.get("/api/recommendations/local-rec")
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["id"], "PM-cs-2891")
-        self.assertGreater(len(payload["derivatives"]), 0)
+        self.assertEqual(response.status_code, 404)
 
     def test_unknown_recommendation_returns_404(self) -> None:
         response = self.client.get("/api/recommendations/not-real")
@@ -50,15 +48,12 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["matches"][0]["label"], "NAVI vs G2")
+        self.assertEqual(payload["matches"], [])
 
     def test_match_markets_endpoint(self) -> None:
-        response = self.client.get("/api/matches/PM-cs-2891/markets")
+        response = self.client.get("/api/matches/local-match/markets")
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["match_id"], "PM-cs-2891")
-        self.assertGreater(len(payload["markets"]), 0)
+        self.assertEqual(response.status_code, 404)
 
     def test_unknown_match_markets_returns_404(self) -> None:
         response = self.client.get("/api/matches/not-real/markets")
@@ -71,31 +66,77 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["strategy_id"], "map-winner")
-        self.assertGreater(len(payload["kpis"]), 0)
+        self.assertFalse(payload["enabled"])
+        self.assertEqual(payload["kpis"], [])
 
     def test_bet_log_endpoint(self) -> None:
         response = self.client.get("/api/bets")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["summary"]["bets"], 142)
-        self.assertGreater(len(payload["rows"]), 0)
+        self.assertEqual(payload["summary"]["bets"], 0)
+        self.assertEqual(payload["rows"], [])
+
+    def test_place_paper_bet_endpoint(self) -> None:
+        response = self.client.post(
+            "/api/bets?mode=paper",
+            json={
+                "market_id": "market-1",
+                "outcome": "NAVI",
+                "model_prob": 0.58,
+                "market_prob": 0.52,
+                "size_fraction": 0.02,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["mode"], "paper")
+        self.assertEqual(payload["market_id"], "market-1")
+        self.assertEqual(payload["outcome"], "NAVI")
+        self.assertGreater(payload["size_usd"], 0.0)
+
+    def test_orders_endpoint_fixture_mode(self) -> None:
+        response = self.client.get("/api/orders")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"orders": []})
 
     def test_ingestion_endpoint(self) -> None:
         response = self.client.get("/api/ingestion")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["sources"][0]["name"], "Polymarket - markets")
-        self.assertTrue(payload["schemas_ok"])
+        self.assertEqual(payload["sources"], [])
+        self.assertFalse(payload["schemas_ok"])
+
+    def test_ingestion_job_endpoint_runs_allowlisted_action(self) -> None:
+        with patch.object(
+            api_data.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=0, stdout='{"applied": true}', stderr=""),
+        ) as run:
+            response = self.client.post("/api/ingestion/jobs", json={"action": "migrate"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["steps"][0]["summary"], {"applied": True})
+        self.assertEqual(run.call_args.args[0][2:], ["core.cli.main", "db-apply-migrations"])
+
+    def test_ingestion_job_endpoint_rejects_unknown_action(self) -> None:
+        response = self.client.post("/api/ingestion/jobs", json={"action": "not-a-real-job"})
+
+        self.assertEqual(response.status_code, 400)
 
     def test_risk_endpoint(self) -> None:
         response = self.client.get("/api/risk")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["kpis"][0]["label"], "Bankroll")
-        self.assertGreater(len(payload["kill_switches"]), 0)
+        self.assertEqual(payload["kpis"], [])
+        self.assertEqual(payload["kill_switches"], [])
 
     def test_postgres_today_mapper_uses_repository_rows(self) -> None:
         future = datetime.now(timezone.utc) + timedelta(hours=2)

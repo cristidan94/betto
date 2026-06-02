@@ -10,6 +10,8 @@ class Correlation(BaseModel):
 
 class TodayRecommendation(BaseModel):
     id: str
+    outcome: str = ""
+    token_id: str | None = None
     match: str
     market: str
     model_prob: float

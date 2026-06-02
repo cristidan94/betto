@@ -18,6 +18,24 @@ from sports.cs.ingestion.kaggle_hltv import (
     write_kaggle_hltv_fixture_payloads,
 )
 from sports.cs.ingestion.oddspapi import OddsPapiClient
-from sports.cs.ingestion.polymarket import PolymarketClient, PolymarketSeedAdapter
+from sports.cs.ingestion.polymarket import (
+    PolymarketClient,
+    PolymarketMarketMeta,
+    PolymarketPriceHistoryResult,
+    PolymarketSeedAdapter,
+    PolymarketToken,
+    parse_price_history,
+)
+from sports.cs.ingestion.polymarket_orders import PolymarketOrderClient
 
-__all__ = ["HltvSeedAdapter", "OddsPapiClient", "PolymarketClient", "PolymarketSeedAdapter"]
+__all__ = [
+    "HltvSeedAdapter",
+    "OddsPapiClient",
+    "PolymarketClient",
+    "PolymarketMarketMeta",
+    "PolymarketOrderClient",
+    "PolymarketPriceHistoryResult",
+    "PolymarketSeedAdapter",
+    "PolymarketToken",
+    "parse_price_history",
+]

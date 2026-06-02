@@ -24,3 +24,36 @@ export interface IngestionResponse {
   schemas_ok: boolean
   leakage_tests_ok: boolean
 }
+
+export type IngestionAction =
+  | 'migrate'
+  | 'polymarket-cs'
+  | 'polymarket-closed'
+  | 'polymarket-price-history'
+  | 'polymarket-account-history'
+  | 'polymarket-reconcile'
+  | 'polymarket-full-refresh'
+
+export interface IngestionJobRequest {
+  action: IngestionAction
+  limit?: number
+  max_pages?: number
+  include_closed?: boolean
+  closed_only?: boolean
+  include_trades?: boolean
+  timeout_sec?: number
+}
+
+export interface IngestionJobStep {
+  command: string[]
+  exit_code: number
+  stdout: string
+  stderr: string
+  summary: unknown
+}
+
+export interface IngestionJobResponse {
+  action: IngestionAction
+  ok: boolean
+  steps: IngestionJobStep[]
+}

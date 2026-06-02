@@ -439,7 +439,7 @@ class PostgresRepository:
                    r.model_prob, r.market_prob, r.edge, r.bankroll_fraction, r.passes_filter,
                    r.reason, r.strategy_id, m.question, m.market_type, c.contest_id,
                    c.starts_at, c.format, c.status, pa.display_name AS participant_a,
-                   pb.display_name AS participant_b, comp.tier
+                   pb.display_name AS participant_b, comp.tier, m.polymarket_meta
             FROM recommendations r
             LEFT JOIN markets m ON m.market_id = r.market_id
             LEFT JOIN contests c ON c.contest_id = m.contest_id
@@ -475,6 +475,7 @@ class PostgresRepository:
                 "participant_a": row[18],
                 "participant_b": row[19],
                 "tier": row[20],
+                "polymarket_meta": row[21],
             }
             for row in rows
         ]
@@ -582,6 +583,282 @@ class PostgresRepository:
             ),
         )
 
+    def insert_execution_bet(
+        self,
+        *,
+        market_id: str,
+        outcome: str,
+        placed_at: Any,
+        model_prob: float,
+        market_prob: float,
+        edge: float,
+        kelly_fraction: float,
+        stake_usd: float,
+        price_in: float | None,
+        strategy_id: str,
+        model_version: str = "api_execution",
+        mode: str = "paper",
+    ) -> int | None:
+        rows = self.db.execute(
+            """
+            INSERT INTO bets
+              (market_id, outcome, placed_at, model_prob, market_prob, edge, kelly_fraction,
+               stake_usd, price_in, strategy_id, model_version, mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING bet_id
+            """,
+            (
+                market_id,
+                outcome,
+                placed_at,
+                model_prob,
+                market_prob,
+                edge,
+                kelly_fraction,
+                stake_usd,
+                price_in,
+                strategy_id,
+                model_version,
+                mode,
+            ),
+        )
+        return int(rows[0][0]) if rows else None
+
+    def insert_order(
+        self,
+        *,
+        order_id: str,
+        bet_id: int | None,
+        market_id: str,
+        outcome: str,
+        mode: str,
+        side: str,
+        size_usd: float,
+        fill_price: float | None,
+        order_status: str,
+        token_id: str | None = None,
+        polymarket_order_id: str | None = None,
+    ) -> None:
+        self.db.execute(
+            """
+            INSERT INTO orders
+              (order_id, bet_id, market_id, outcome, mode, side, size_usd, fill_price,
+               fill_size_usd, order_status, polymarket_token_id, polymarket_order_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (order_id) DO UPDATE SET
+              bet_id = COALESCE(EXCLUDED.bet_id, orders.bet_id),
+              fill_price = EXCLUDED.fill_price,
+              fill_size_usd = EXCLUDED.fill_size_usd,
+              order_status = EXCLUDED.order_status,
+              polymarket_token_id = COALESCE(EXCLUDED.polymarket_token_id, orders.polymarket_token_id),
+              polymarket_order_id = COALESCE(EXCLUDED.polymarket_order_id, orders.polymarket_order_id),
+              updated_at = now()
+            """,
+            (
+                order_id,
+                bet_id,
+                market_id,
+                outcome,
+                mode,
+                side,
+                size_usd,
+                fill_price,
+                size_usd if fill_price is not None else None,
+                order_status,
+                token_id,
+                polymarket_order_id,
+            ),
+        )
+
+    def list_orders(self, market_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        where_sql = "WHERE market_id = %s" if market_id is not None else ""
+        params: tuple[Any, ...] = (market_id, limit) if market_id is not None else (limit,)
+        rows = self.db.execute(
+            f"""
+            SELECT order_id, bet_id, market_id, outcome, mode, order_type, side,
+                   limit_price, fill_price, size_usd, fill_size_usd, order_status,
+                   polymarket_token_id, polymarket_order_id, tx_hash, created_at, updated_at
+            FROM orders
+            {where_sql}
+            ORDER BY created_at DESC, order_id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return [
+            {
+                "order_id": row[0],
+                "bet_id": row[1],
+                "market_id": row[2],
+                "outcome": row[3],
+                "mode": row[4],
+                "order_type": row[5],
+                "side": row[6],
+                "limit_price": row[7],
+                "fill_price": row[8],
+                "size_usd": row[9],
+                "fill_size_usd": row[10],
+                "order_status": row[11],
+                "polymarket_token_id": row[12],
+                "polymarket_order_id": row[13],
+                "tx_hash": row[14],
+                "created_at": row[15],
+                "updated_at": row[16],
+            }
+            for row in rows
+        ]
+
+    def mark_order_cancelled(self, order_id: str) -> None:
+        self.db.execute(
+            """
+            UPDATE orders
+            SET order_status = 'cancelled',
+                updated_at = now()
+            WHERE order_id = %s OR polymarket_order_id = %s
+            """,
+            (order_id, order_id),
+        )
+
+    def reconcile_polymarket_trades_to_orders(self) -> int:
+        rows = self.db.execute(
+            """
+            WITH trade_summary AS (
+              SELECT
+                order_id,
+                SUM(size * price) / NULLIF(SUM(size), 0) AS fill_price,
+                SUM(size * price) AS fill_size_usd,
+                MAX(tx_hash) FILTER (WHERE tx_hash IS NOT NULL) AS tx_hash
+              FROM polymarket_trades
+              WHERE order_id IS NOT NULL
+              GROUP BY order_id
+            )
+            UPDATE orders o
+            SET fill_price = COALESCE(ts.fill_price, o.fill_price),
+                fill_size_usd = COALESCE(ts.fill_size_usd, o.fill_size_usd),
+                tx_hash = COALESCE(ts.tx_hash, o.tx_hash),
+                order_status = CASE
+                  WHEN COALESCE(ts.fill_size_usd, 0) >= o.size_usd * 0.999 THEN 'filled'
+                  WHEN COALESCE(ts.fill_size_usd, 0) > 0 THEN 'partial'
+                  ELSE o.order_status
+                END,
+                updated_at = now()
+            FROM trade_summary ts
+            WHERE o.order_id = ts.order_id OR o.polymarket_order_id = ts.order_id
+            RETURNING o.order_id
+            """,
+            (),
+        )
+        return len(rows or [])
+
+    def settle_bets_from_polymarket_resolutions(self, strategy_id: str | None = None) -> int:
+        strategy_filter = "AND b.strategy_id = %s" if strategy_id is not None else ""
+        params: tuple[Any, ...] = (strategy_id,) if strategy_id is not None else ()
+        rows = self.db.execute(
+            f"""
+            WITH resolved AS (
+              SELECT
+                b.bet_id,
+                m.resolved_outcome,
+                CASE WHEN m.resolved_outcome = b.outcome THEN 1.0::numeric ELSE 0.0::numeric END AS close_price
+              FROM bets b
+              JOIN markets m ON m.market_id = b.market_id
+              WHERE m.source = 'polymarket'
+                AND m.resolved_outcome IS NOT NULL
+                AND b.resolved_outcome IS NULL
+                AND b.price_in IS NOT NULL
+                AND b.price_in > 0
+                {strategy_filter}
+            )
+            UPDATE bets b
+            SET price_close = r.close_price,
+                clv = r.close_price - b.price_in,
+                resolved_outcome = r.resolved_outcome,
+                pnl_usd = CASE
+                  WHEN r.resolved_outcome = b.outcome THEN b.stake_usd * ((1 / b.price_in) - 1)
+                  ELSE -b.stake_usd
+                END
+            FROM resolved r
+            WHERE b.bet_id = r.bet_id
+            RETURNING b.bet_id
+            """,
+            params,
+        )
+        return len(rows or [])
+
+    def upsert_polymarket_account_order(self, raw: dict[str, Any]) -> None:
+        self.db.execute(
+            """
+            INSERT INTO polymarket_account_orders
+              (order_id, market_id, token_id, side, outcome, original_size, size_matched,
+               price, status, order_type, created_at, raw)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (order_id) DO UPDATE SET
+              market_id = EXCLUDED.market_id,
+              token_id = EXCLUDED.token_id,
+              side = EXCLUDED.side,
+              outcome = EXCLUDED.outcome,
+              original_size = EXCLUDED.original_size,
+              size_matched = EXCLUDED.size_matched,
+              price = EXCLUDED.price,
+              status = EXCLUDED.status,
+              order_type = EXCLUDED.order_type,
+              created_at = EXCLUDED.created_at,
+              raw = EXCLUDED.raw,
+              ingested_at = now()
+            """,
+            (
+                str(raw.get("id") or raw.get("order_id") or raw.get("orderID") or ""),
+                _text_or_none(raw.get("market")),
+                _text_or_none(raw.get("asset_id") or raw.get("tokenID") or raw.get("token_id")),
+                _text_or_none(raw.get("side")),
+                _text_or_none(raw.get("outcome")),
+                _numeric_or_none(raw.get("original_size") or raw.get("size")),
+                _numeric_or_none(raw.get("size_matched") or raw.get("filled_size")),
+                _numeric_or_none(raw.get("price")),
+                _text_or_none(raw.get("status")),
+                _text_or_none(raw.get("order_type") or raw.get("type")),
+                _text_or_none(raw.get("created_at") or raw.get("createdAt")),
+                json.dumps(raw),
+            ),
+        )
+
+    def upsert_polymarket_trade(self, raw: dict[str, Any]) -> None:
+        self.db.execute(
+            """
+            INSERT INTO polymarket_trades
+              (trade_id, order_id, market_id, token_id, side, outcome, size, price,
+               status, tx_hash, matched_at, raw)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (trade_id) DO UPDATE SET
+              order_id = EXCLUDED.order_id,
+              market_id = EXCLUDED.market_id,
+              token_id = EXCLUDED.token_id,
+              side = EXCLUDED.side,
+              outcome = EXCLUDED.outcome,
+              size = EXCLUDED.size,
+              price = EXCLUDED.price,
+              status = EXCLUDED.status,
+              tx_hash = EXCLUDED.tx_hash,
+              matched_at = EXCLUDED.matched_at,
+              raw = EXCLUDED.raw,
+              ingested_at = now()
+            """,
+            (
+                str(raw.get("id") or raw.get("trade_id") or ""),
+                _text_or_none(raw.get("taker_order_id") or raw.get("order_id") or raw.get("orderId")),
+                _text_or_none(raw.get("market")),
+                _text_or_none(raw.get("asset_id") or raw.get("assetId") or raw.get("token_id")),
+                _text_or_none(raw.get("side")),
+                _text_or_none(raw.get("outcome")),
+                _numeric_or_none(raw.get("size")),
+                _numeric_or_none(raw.get("price")),
+                _text_or_none(raw.get("status")),
+                _text_or_none(raw.get("transactionHash") or raw.get("tx_hash")),
+                _text_or_none(raw.get("matchTime") or raw.get("matched_at") or raw.get("created_at")),
+                json.dumps(raw),
+            ),
+        )
+
     def list_paper_bets(self, strategy_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         where_sql = "WHERE strategy_id = %s" if strategy_id is not None else ""
         params: tuple[Any, ...] = (strategy_id, limit) if strategy_id is not None else (limit,)
@@ -589,7 +866,7 @@ class PostgresRepository:
             f"""
             SELECT bet_id, recommendation_id, market_id, outcome, placed_at, model_prob, market_prob, edge,
                    kelly_fraction, stake_usd, price_in, price_close, clv, resolved_outcome, pnl_usd,
-                   model_version, strategy_id
+                   model_version, strategy_id, mode
             FROM bets
             {where_sql}
             ORDER BY placed_at DESC, bet_id DESC
@@ -616,6 +893,7 @@ class PostgresRepository:
                 "pnl_usd": row[14],
                 "model_version": row[15],
                 "strategy_id": row[16],
+                "mode": row[17],
             }
             for row in rows
         ]
@@ -882,11 +1160,56 @@ class PostgresRepository:
             ),
         )
 
+    def update_market_polymarket_meta(self, market_id: str, meta: dict[str, Any], description: str = "") -> None:
+        self.db.execute(
+            """
+            UPDATE markets
+            SET polymarket_meta = %s::jsonb,
+                description = %s
+            WHERE market_id = %s
+            """,
+            (json.dumps(meta), description, market_id),
+        )
+
+    def list_polymarket_tokens_for_price_history(self, limit: int = 100, closed_only: bool = False) -> list[dict[str, Any]]:
+        closed_filter = """
+            AND (
+              m.resolved_outcome IS NOT NULL
+              OR COALESCE((m.polymarket_meta->>'closed')::boolean, false)
+            )
+        """ if closed_only else ""
+        rows = self.db.execute(
+            f"""
+            SELECT
+                m.market_id,
+                token->>'outcome' AS outcome,
+                token->>'token_id' AS token_id
+            FROM markets m
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.polymarket_meta->'tokens', '[]'::jsonb)) AS token
+            WHERE m.source = 'polymarket'
+              AND m.polymarket_meta IS NOT NULL
+              AND token->>'token_id' IS NOT NULL
+              {closed_filter}
+            ORDER BY m.created_at DESC NULLS LAST, m.market_id
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [
+            {
+                "market_id": row[0],
+                "outcome": row[1],
+                "token_id": row[2],
+            }
+            for row in rows
+        ]
+
     def insert_market_snapshot(self, snapshot: MarketSnapshot) -> None:
         self.db.execute(
             """
             INSERT INTO market_snapshots (market_id, outcome, taken_at, best_bid, best_ask, last_trade_price, depth_bid_1pct, depth_ask_1pct)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (market_id, outcome, taken_at) DO NOTHING
             """,
             (
                 snapshot.market_id,
@@ -899,6 +1222,60 @@ class PostgresRepository:
                 snapshot.depth_ask_1pct,
             ),
         )
+
+    def list_edge_comparison_rows(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            """
+            WITH latest_snapshots AS (
+                SELECT DISTINCT ON (ms.market_id, ms.outcome)
+                    ms.market_id, ms.outcome, ms.best_bid, ms.best_ask,
+                    ms.last_trade_price, ms.taken_at
+                FROM market_snapshots ms
+                ORDER BY ms.market_id, ms.outcome, ms.taken_at DESC
+            )
+            SELECT
+                m.contest_id,
+                COALESCE(
+                    (SELECT pa.display_name FROM participants pa WHERE pa.participant_id = c.participant_a_id)
+                    || ' vs ' ||
+                    (SELECT pb.display_name FROM participants pb WHERE pb.participant_id = c.participant_b_id),
+                    m.question
+                ) AS match_label,
+                m.market_type,
+                ls.outcome,
+                r.model_prob,
+                CASE WHEN m.source = 'polymarket' THEN
+                    CASE WHEN ls.best_bid IS NOT NULL AND ls.best_ask IS NOT NULL
+                        THEN (ls.best_bid + ls.best_ask) / 2
+                        ELSE ls.last_trade_price END
+                END AS pm_prob,
+                CASE WHEN m.source = 'polymarket' THEN ls.best_bid END AS pm_bid,
+                CASE WHEN m.source = 'polymarket' THEN ls.best_ask END AS pm_ask,
+                (m.polymarket_meta->>'volume_usd')::numeric AS pm_volume
+            FROM markets m
+            JOIN latest_snapshots ls ON ls.market_id = m.market_id
+            LEFT JOIN contests c ON c.contest_id = m.contest_id
+            LEFT JOIN recommendations r ON r.market_id = m.market_id AND r.outcome = ls.outcome
+            WHERE m.source = 'polymarket'
+            ORDER BY ls.taken_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [
+            {
+                "contest_id": row[0] or "",
+                "match_label": row[1] or "",
+                "market_type": row[2] or "",
+                "outcome": row[3] or "",
+                "model_prob": float(row[4]) if row[4] is not None else None,
+                "pm_prob": float(row[5]) if row[5] is not None else None,
+                "pm_bid": float(row[6]) if row[6] is not None else None,
+                "pm_ask": float(row[7]) if row[7] is not None else None,
+                "pm_volume": float(row[8]) if row[8] is not None else None,
+            }
+            for row in rows
+        ]
 
     def update_market_link(
         self,
@@ -922,3 +1299,19 @@ class PostgresRepository:
                 market_id,
             ),
         )
+
+
+def _text_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _numeric_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
