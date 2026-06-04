@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
@@ -623,6 +623,7 @@ def db_ingest_polymarket_cs(args: argparse.Namespace) -> int:
         with PostgresExecutor(settings.database_url) as db:
             repo = PostgresRepository(db)
             repo.upsert_raw_object(store.put(discovery.raw_payload))
+            snapshot_count = 0
             for market in discovery.markets:
                 repo.upsert_market(market.market)
                 repo.update_market_polymarket_meta(
@@ -633,16 +634,22 @@ def db_ingest_polymarket_cs(args: argparse.Namespace) -> int:
                 for token in market.tokens:
                     try:
                         book = client.get_order_book(market.market.market_id, token)
+                    except HTTPError as exc:
+                        if exc.code == 404:
+                            # No live CLOB order book for this token (e.g. a
+                            # resolved/closed market) — skip it, don't abort.
+                            continue
+                        return print_error("network_unavailable", str(exc))
                     except URLError as exc:
                         return print_error("network_unavailable", str(exc))
                     repo.upsert_raw_object(store.put(book.raw_payload))
                     repo.insert_market_snapshot(book.snapshot)
+                    snapshot_count += 1
     except MissingPostgresDriverError as exc:
         return print_error("missing_postgres_driver", str(exc))
     except Exception as exc:
         return print_error("db_ingest_failed", str(exc))
 
-    snapshot_count = sum(len(market.tokens) for market in discovery.markets)
     print(json.dumps({"markets_upserted": len(discovery.markets), "snapshots_inserted": snapshot_count}, indent=2, sort_keys=True))
     return 0
 

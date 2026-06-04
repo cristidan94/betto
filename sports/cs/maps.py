@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+
 ACTIVE_DUTY_MAPS: tuple[str, ...] = (
     "Ancient",
     "Anubis",
@@ -16,7 +18,11 @@ ACTIVE_DUTY_MAPS: tuple[str, ...] = (
 
 
 def normalize_map_name(value: str) -> str:
-    cleaned = value.strip().lower().replace("_", " ").replace("-", " ")
+    # Strip combining marks so diacritic/Unicode variants from scraped pages
+    # (e.g. the Turkish dotted "İnferno") fold onto their ASCII map name.
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_folded = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    cleaned = ascii_folded.strip().lower().replace("_", " ").replace("-", " ")
     aliases = {
         "de ancient": "Ancient",
         "ancient": "Ancient",

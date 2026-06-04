@@ -99,32 +99,56 @@ class PolymarketClient:
         self.clob_url = clob_url
         self.http = http or JsonHttpClient()
 
+    # Gamma tag ids that mark an event as Counter-Strike. CSGO-era events use
+    # "counter-strike" (100602); CS2-era events use "cs2" (100677). Counter-Strike
+    # markets are a sparse minority of Polymarket's catalog, so scanning the
+    # generic /markets feed never reaches them within a sane page budget.
+    CS_TAG_IDS: tuple[int, ...] = (100677, 100602)
+
     def discover_cs_markets(self, limit: int = 100, offset: int = 0, include_closed: bool = False) -> PolymarketDiscoveryResult:
-        params = {
-            "limit": limit,
-            "offset": offset,
-            "closed": str(include_closed).lower(),
-            "archived": "false",
-        }
-        response = self.http.get(self.gamma_url, "/markets", params=params)
-        payload = response.json()
-        rows = payload if isinstance(payload, list) else payload.get("markets", [])
-        markets = tuple(
-            parsed
-            for row in rows
-            if isinstance(row, dict) and is_counter_strike_market(row)
-            for parsed in [parse_gamma_market(row)]
-            if parsed is not None
-        )
+        # Query the /events feed filtered server-side by the CS tag ids and
+        # flatten the markets each event embeds, rather than text-filtering the
+        # generic /markets feed (which buries CS markets among tens of thousands).
+        closed = str(include_closed).lower()
+        events: list[dict[str, Any]] = []
+        last_url = ""
+        for tag_id in self.CS_TAG_IDS:
+            response = self.http.get(
+                self.gamma_url,
+                "/events",
+                params={
+                    "tag_id": tag_id,
+                    "limit": limit,
+                    "offset": offset,
+                    "closed": closed,
+                    "archived": "false",
+                },
+            )
+            last_url = response.url
+            payload = response.json()
+            rows = payload if isinstance(payload, list) else payload.get("data", [])
+            events.extend(row for row in rows if isinstance(row, dict))
+
+        seen: set[str] = set()
+        markets: list[PolymarketMarket] = []
+        for row in _event_markets(events):
+            if not is_counter_strike_market(row):
+                continue
+            parsed = parse_gamma_market(row)
+            if parsed is None or parsed.market.market_id in seen:
+                continue
+            seen.add(parsed.market.market_id)
+            markets.append(parsed)
+
         raw = FetchResult(
             source=self.source,
-            source_id=f"gamma-markets-{offset}-{limit}",
-            url=response.url,
-            content=response.body,
-            content_type=response.headers.get("content-type", "application/json"),
+            source_id=f"gamma-events-cs-{offset}-{limit}",
+            url=last_url,
+            content=json.dumps(events).encode("utf-8"),
+            content_type="application/json",
             fetched_at=datetime.now(timezone.utc),
         )
-        return PolymarketDiscoveryResult(raw_payload=raw, markets=markets)
+        return PolymarketDiscoveryResult(raw_payload=raw, markets=tuple(markets))
 
     def get_order_book(self, market_id: str, token: PolymarketToken) -> PolymarketBookResult:
         response = self.http.get(self.clob_url, "/book", params={"token_id": token.token_id})
@@ -148,15 +172,19 @@ class PolymarketClient:
         start_ts: int | None = None,
         end_ts: int | None = None,
         fidelity: int | str = 720,
+        interval: str = "max",
     ) -> PolymarketPriceHistoryResult:
         params: dict[str, object] = {
             "market": token.token_id,
             "fidelity": fidelity,
         }
-        if start_ts is not None:
+        # The CLOB endpoint requires either an explicit startTs+endTs window or
+        # an interval; market+fidelity alone returns HTTP 400.
+        if start_ts is not None and end_ts is not None:
             params["startTs"] = start_ts
-        if end_ts is not None:
             params["endTs"] = end_ts
+        else:
+            params["interval"] = interval
 
         response = self.http.get(self.clob_url, "/prices-history", params=params)
         payload = response.json()
@@ -188,6 +216,30 @@ def is_counter_strike_market(row: dict[str, Any]) -> bool:
     haystack = " ".join(haystack_parts).lower()
     terms = ("counter-strike", "counter strike", "counterstrike", "cs2", "cs:go", "csgo")
     return any(term in haystack for term in terms)
+
+
+def _event_markets(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten markets embedded in gamma events, propagating event context
+    (slug/title/tags) onto each market row. Embedded market rows carry their own
+    odds/tokens/resolution but leave eventSlug/eventTitle/tags null, which CS
+    detection and downstream event linkage rely on."""
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        event_slug = event.get("slug")
+        event_title = event.get("title")
+        event_tags = event.get("tags")
+        for market in event.get("markets") or []:
+            if not isinstance(market, dict):
+                continue
+            enriched = dict(market)
+            if not enriched.get("eventSlug"):
+                enriched["eventSlug"] = event_slug
+            if not enriched.get("eventTitle"):
+                enriched["eventTitle"] = event_title
+            if event_tags and not enriched.get("tags"):
+                enriched["tags"] = event_tags
+            rows.append(enriched)
+    return rows
 
 
 def parse_gamma_market(row: dict[str, Any]) -> PolymarketMarket | None:

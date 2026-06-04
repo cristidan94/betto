@@ -22,38 +22,53 @@ class FakeHttp:
 
     def get(self, base_url: str, path: str, params: dict[str, object] | None = None) -> HttpResponse:
         self.calls.append((base_url, path, params))
-        if path == "/markets":
+        if path == "/events":
+            # Discovery reads the /events feed (filtered by CS tag id) and flattens
+            # the markets each event embeds; embedded markets leave eventSlug/
+            # eventTitle/tags null, so CS context comes from the parent event.
             body = json.dumps(
                 [
                     {
-                        "id": "market-1",
-                        "question": "Will NAVI beat Vitality in Counter-Strike 2?",
-                        "outcomes": "[\"NAVI\", \"Vitality\"]",
-                        "clobTokenIds": "[\"token-a\", \"token-b\"]",
-                        "createdAt": "2026-05-16T10:00:00Z",
-                        "volumeNum": 45200.50,
-                        "liquidityNum": 12000.0,
-                        "outcomePrices": "[\"0.62\", \"0.38\"]",
-                        "active": True,
-                        "closed": False,
-                        "archived": False,
-                        "acceptingOrders": True,
-                        "negRisk": False,
-                        "description": "Will NAVI win vs Vitality at IEM Dallas?",
-                        "eventSlug": "iem-dallas-2026",
-                        "eventTitle": "IEM Dallas 2026",
-                        "startDate": "2026-05-20T18:00:00Z",
-                        "endDate": "2026-05-20T22:00:00Z",
+                        "slug": "iem-dallas-2026",
+                        "title": "IEM Dallas 2026",
+                        "tags": [{"id": "100677", "slug": "cs2", "label": "CS2"}],
+                        "markets": [
+                            {
+                                "id": "market-1",
+                                "question": "Will NAVI beat Vitality?",
+                                "outcomes": "[\"NAVI\", \"Vitality\"]",
+                                "clobTokenIds": "[\"token-a\", \"token-b\"]",
+                                "createdAt": "2026-05-16T10:00:00Z",
+                                "volumeNum": 45200.50,
+                                "liquidityNum": 12000.0,
+                                "outcomePrices": "[\"0.62\", \"0.38\"]",
+                                "active": True,
+                                "closed": False,
+                                "archived": False,
+                                "acceptingOrders": True,
+                                "negRisk": False,
+                                "description": "Will NAVI win vs Vitality at IEM Dallas?",
+                                "startDate": "2026-05-20T18:00:00Z",
+                                "endDate": "2026-05-20T22:00:00Z",
+                            }
+                        ],
                     },
                     {
-                        "id": "market-2",
-                        "question": "Will it rain tomorrow?",
-                        "outcomes": "[\"Yes\", \"No\"]",
-                        "clobTokenIds": "[\"token-c\", \"token-d\"]",
+                        "slug": "weather-2026",
+                        "title": "Weather",
+                        "tags": [],
+                        "markets": [
+                            {
+                                "id": "market-2",
+                                "question": "Will it rain tomorrow?",
+                                "outcomes": "[\"Yes\", \"No\"]",
+                                "clobTokenIds": "[\"token-c\", \"token-d\"]",
+                            }
+                        ],
                     },
                 ]
             ).encode("utf-8")
-            return HttpResponse("https://gamma.test/markets", 200, body, {"content-type": "application/json"})
+            return HttpResponse("https://gamma.test/events", 200, body, {"content-type": "application/json"})
         if path == "/prices-history":
             body = json.dumps(
                 {
