@@ -114,7 +114,7 @@ def parse_match_page(html: str, match_id: str) -> dict[str, Any]:
     return {
         "hltv_id": match_id,
         "scheduled_at": _match_datetime(soup).isoformat(),
-        "best_of": _best_of(soup, len(maps)),
+        "best_of": _best_of(soup, maps),
         "status": "finished" if maps else "scheduled",
         "team_a": teams[0],
         "team_b": teams[1],
@@ -263,7 +263,7 @@ def _parse_match_page_fallback(html: str, match_id: str) -> dict[str, Any]:
     return {
         "hltv_id": match_id,
         "scheduled_at": _fallback_datetime(html).isoformat(),
-        "best_of": _fallback_best_of(html, len(maps)),
+        "best_of": _fallback_best_of(html, maps),
         "status": "finished" if maps else "scheduled",
         "team_a": teams[0],
         "team_b": teams[1],
@@ -436,11 +436,41 @@ def _fallback_stats_url(html: str) -> str | None:
     return None
 
 
-def _fallback_best_of(html: str, map_count: int) -> int:
-    match = re.search(r"Best of\s*(\d+)|bo\s*(\d+)", _strip_tags(html), re.I)
-    if match:
-        return int(match.group(1) or match.group(2))
+def _results_floor(maps: list[dict[str, Any]] | None) -> int:
+    """Minimum best_of a finished series proves: a team that won W maps must
+    have played at least a Bo(2W-1), so a 2-0 sweep cannot be a Bo1."""
+    wins_a = wins_b = 0
+    for item in maps or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            score_a = int(item.get("team_a_score"))
+            score_b = int(item.get("team_b_score"))
+        except (TypeError, ValueError):
+            continue
+        if score_a > score_b:
+            wins_a += 1
+        elif score_b > score_a:
+            wins_b += 1
+    top = max(wins_a, wins_b)
+    return 2 * top - 1 if top else 0
+
+
+def _resolve_best_of(text: str, maps: list[dict[str, Any]]) -> int:
+    match = re.search(r"Best of\s*(\d+)|bo\s*(\d+)", text, re.I)
+    parsed = int(match.group(1) or match.group(2)) if match else 0
+    floor = _results_floor(maps)
+    # Trust an explicit "Best of N" but never report fewer maps than the
+    # results prove; when the page omits it, fall back to the results floor,
+    # then to the odd-map-count heuristic for unplayed/edge cases.
+    if parsed or floor:
+        return max(parsed, floor)
+    map_count = len(maps)
     return map_count if map_count % 2 == 1 and map_count else 1
+
+
+def _fallback_best_of(html: str, maps: list[dict[str, Any]]) -> int:
+    return _resolve_best_of(_strip_tags(html), maps)
 
 
 def _canonical_map(value: str) -> str:
@@ -1055,12 +1085,8 @@ def _head_to_head(soup, teams: tuple[dict[str, str], dict[str, str]]) -> dict[st
     return None
 
 
-def _best_of(soup, map_count: int) -> int:
-    text = soup.get_text(" ", strip=True)
-    match = re.search(r"Best of\s*(\d+)|bo\s*(\d+)", text, re.I)
-    if match:
-        return int(match.group(1) or match.group(2))
-    return map_count if map_count % 2 == 1 and map_count else 1
+def _best_of(soup, maps: list[dict[str, Any]]) -> int:
+    return _resolve_best_of(soup.get_text(" ", strip=True), maps)
 
 
 def _match_datetime(soup) -> datetime:

@@ -3,7 +3,14 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from scraper.parser import parse_map_stats_page, parse_match_page, parse_results_page, parse_stats_page
+from scraper.parser import (
+    _resolve_best_of,
+    _results_floor,
+    parse_map_stats_page,
+    parse_match_page,
+    parse_results_page,
+    parse_stats_page,
+)
 
 
 RESULTS_HTML = """
@@ -116,6 +123,27 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(match["stats_url"], "https://www.hltv.org/stats/matches/112345/navi-vs-faze")
         self.assertGreaterEqual(len(match["players"]), 3)
         self.assertGreaterEqual(len(match["vetoes"]), 1)
+
+    def test_best_of_inferred_from_results_when_text_missing(self) -> None:
+        sweep = [
+            {"team_a_score": 13, "team_b_score": 7},
+            {"team_a_score": 13, "team_b_score": 9},
+        ]
+        # No "Best of N" text on the page: a 2-0 sweep proves at least a Bo3
+        # (the old odd-map-count heuristic wrongly returned 1 for 2 maps).
+        self.assertEqual(_resolve_best_of("Group A decider", sweep), 3)
+        # A 3-1 series proves at least a Bo5.
+        bo5 = sweep + [{"team_a_score": 7, "team_b_score": 13}, {"team_a_score": 13, "team_b_score": 4}]
+        self.assertEqual(_resolve_best_of("", bo5), 5)
+        # An explicit "Best of N" is trusted but never lowered below the floor.
+        self.assertEqual(_resolve_best_of("Best of 1", sweep), 3)
+        # Single-map forfeit: results floor is 1, so an explicit Bo3 is kept.
+        forfeit = [{"team_a_score": 13, "team_b_score": 5}]
+        self.assertEqual(_resolve_best_of("Best of 3", forfeit), 3)
+        # No maps and no text (unplayed) falls back to the odd-count heuristic.
+        self.assertEqual(_resolve_best_of("upcoming", []), 1)
+        # Tied maps contribute no wins, so they don't inflate the floor.
+        self.assertEqual(_results_floor([{"team_a_score": 13, "team_b_score": 13}]), 0)
 
     def test_parse_match_page_parses_numbered_veto_box(self) -> None:
         html = """
