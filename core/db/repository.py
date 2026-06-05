@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol
 
-from core.entities import Competition, Contest, ContestUnit, Participant
+from core.entities import Competition, Contest, ContestUnit, Participant, ParticipantKind
 from core.edge import Recommendation
 from core.feature_store import FeatureValue
 from core.markets import Market, MarketSnapshot
@@ -498,7 +498,9 @@ class PostgresRepository:
             LEFT JOIN recommendations r ON r.market_id = m.market_id
             WHERE c.game_id = 'counter_strike'
             GROUP BY c.contest_id, c.starts_at, c.format, c.status, pa.display_name, pb.display_name, comp.tier
-            ORDER BY c.starts_at ASC, c.contest_id
+            -- Surface contests that actually have markets first, then the most recent,
+            -- so linked/actionable matches are visible instead of the oldest in history.
+            ORDER BY COUNT(DISTINCT m.market_id) DESC, c.starts_at DESC, c.contest_id
             LIMIT %s
             """,
             (limit,),
@@ -1299,6 +1301,78 @@ class PostgresRepository:
                 market_id,
             ),
         )
+
+    def list_participants(self, game_id: str | None = None) -> list[Participant]:
+        where = "WHERE game_id = %s" if game_id else ""
+        params: tuple[Any, ...] = (game_id,) if game_id else ()
+        rows = self.db.execute(
+            f"""
+            SELECT participant_id, game_id, kind, display_name, source, source_id
+            FROM participants
+            {where}
+            """,
+            params,
+        )
+        return [
+            Participant(
+                participant_id=row[0],
+                game_id=row[1],
+                kind=ParticipantKind(row[2]),
+                display_name=row[3],
+                source=row[4] or "",
+                source_id=row[5] or "",
+            )
+            for row in rows
+        ]
+
+    def list_contests(self, game_id: str | None = None) -> list[Contest]:
+        where = "WHERE game_id = %s" if game_id else ""
+        params: tuple[Any, ...] = (game_id,) if game_id else ()
+        rows = self.db.execute(
+            f"""
+            SELECT contest_id, game_id, competition_id, starts_at,
+                   participant_a_id, participant_b_id, format, status,
+                   match_stage, head_to_head
+            FROM contests
+            {where}
+            """,
+            params,
+        )
+        return [
+            Contest(
+                contest_id=row[0],
+                game_id=row[1],
+                competition_id=row[2],
+                starts_at=row[3],
+                participant_a_id=row[4],
+                participant_b_id=row[5],
+                format=row[6],
+                status=row[7],
+                match_stage=row[8],
+                head_to_head=row[9],
+            )
+            for row in rows
+        ]
+
+    def list_unlinked_markets(self, source: str = "polymarket") -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            """
+            SELECT market_id, question, outcomes, created_at, resolved_at
+            FROM markets
+            WHERE source = %s AND contest_id IS NULL
+            """,
+            (source,),
+        )
+        return [
+            {
+                "market_id": row[0],
+                "question": row[1],
+                "outcomes": list(row[2]) if row[2] is not None else [],
+                "created_at": row[3],
+                "resolved_at": row[4],
+            }
+            for row in rows
+        ]
 
 
 def _text_or_none(value: Any) -> str | None:

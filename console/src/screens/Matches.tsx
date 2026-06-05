@@ -112,7 +112,7 @@ export default function Matches({ onNavigate, mode, onModeChange }: ScreenProps)
             <table className="tbl" style={{ tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: 38 }} />
-                <col style={{ width: 60 }} />
+                <col style={{ width: 92 }} />
                 <col />
                 <col style={{ width: 40 }} />
                 <col style={{ width: 44 }} />
@@ -126,7 +126,7 @@ export default function Matches({ onNavigate, mode, onModeChange }: ScreenProps)
               <thead>
                 <tr>
                   <th></th>
-                  <th>Start</th>
+                  <th>Start (RO)</th>
                   <th>Match</th>
                   <th>Tier</th>
                   <th>Fmt</th>
@@ -144,7 +144,12 @@ export default function Matches({ onNavigate, mode, onModeChange }: ScreenProps)
                   return (
                     <tr key={i} className={`tbl-row ${selected ? 'sel' : ''}`} onClick={() => setSel(i)} style={{ cursor: 'pointer', height: 32 }}>
                       <td><span className="idx">{(i + 1).toString().padStart(2, '0')}</span></td>
-                      <td className="c-muted num" style={{ fontSize: 11 }}>{row.start}</td>
+                      <td className="num" style={{ fontSize: 11 }}>
+                        <div className="col" style={{ gap: 1 }}>
+                          <span style={{ color: 'var(--ink-2)' }}>{row.start}</span>
+                          <span className="c-muted" style={{ fontSize: 10 }}>{row.start_date}</span>
+                        </div>
+                      </td>
                       <td>
                         <div className="col" style={{ gap: 1 }}>
                           <span style={{ color: selected ? 'var(--ink)' : 'var(--ink-2)', fontWeight: selected ? 500 : 400 }}>{row.label}</span>
@@ -262,7 +267,8 @@ export default function Matches({ onNavigate, mode, onModeChange }: ScreenProps)
             <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 12, rowGap: 4, fontSize: 12 }}>
               <span className="c-muted">roster</span><span className="num">unknown</span>
               <span className="c-muted">stand-ins</span><span className="num">unknown</span>
-              <span className="c-muted">timezone</span><span className="num">unknown</span>
+              <span className="c-muted">starts (RO)</span><span className="num">{m.start_date} - {m.start}</span>
+              <span className="c-muted">timezone</span><span className="num">Europe/Bucharest</span>
               <span className="c-muted">schedule</span><span className="num">{m.start_in}</span>
               <span className="c-muted">news - 24h</span><span className="num">unknown</span>
             </div>

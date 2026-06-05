@@ -33,6 +33,19 @@ class ExtractTeamNamesTests(unittest.TestCase):
         result = extract_team_names("Will it rain tomorrow?")
         self.assertIsNone(result)
 
+    def test_strips_event_prefix(self) -> None:
+        result = extract_team_names("IEM Cologne: 3DMAX vs. TYLOO")
+        self.assertEqual(result, ("3DMAX", "TYLOO"))
+
+    def test_strips_cs_prefix(self) -> None:
+        result = extract_team_names("CS: Falcons vs Legacy")
+        self.assertEqual(result, ("Falcons", "Legacy"))
+
+    def test_rejects_tournament_future(self) -> None:
+        # "Will X win the Y Tournament?" is a futures market, not a head-to-head.
+        result = extract_team_names("Will Astralis win the IEM Chengdu Tournament?")
+        self.assertIsNone(result)
+
 
 class LinkMarketToContestTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -89,6 +102,40 @@ class LinkMarketToContestTests(unittest.TestCase):
             [],
         )
         self.assertIsNone(result)
+
+    def test_event_prefix_does_not_false_match_alias(self) -> None:
+        # "Cologne" must not match Complexity's "col" alias once the prefix is stripped.
+        complexity = Participant(
+            "cs:participant:hltv:col", "cs2", ParticipantKind.TEAM, "Complexity Gaming", "hltv", "5005"
+        )
+        result = link_market_to_contest(
+            "IEM Cologne: 3DMAX vs. TYLOO",
+            [*self.participants, complexity],
+            [self.contest],
+        )
+        # Neither 3DMAX nor TYLOO is a known participant here, so no (false) link.
+        self.assertIsNone(result)
+
+    def test_picks_temporally_closest_meeting(self) -> None:
+        early = Contest(
+            contest_id="cs:contest:hltv:1111",
+            game_id="cs2",
+            competition_id="comp-1",
+            starts_at=datetime(2024, 1, 10, 18, 0, tzinfo=timezone.utc),
+            participant_a_id="cs:participant:hltv:navi",
+            participant_b_id="cs:participant:hltv:vitality",
+            format="best_of_3",
+            status="finished",
+        )
+        result = link_market_to_contest(
+            "Will NAVI beat Vitality?",
+            self.participants,
+            [early, self.contest],
+            market_end_date=datetime(2026, 5, 20, 20, 0, tzinfo=timezone.utc),
+        )
+        assert result is not None
+        self.assertEqual(result.contest_id, "cs:contest:hltv:2370001")
+        self.assertEqual(result.confidence, 0.95)
 
 
 if __name__ == "__main__":

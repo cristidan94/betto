@@ -4,6 +4,7 @@ export interface MatchEntry {
   tier: string
   format: string
   start: string
+  start_date: string
   start_in: string
   regime: string
   veto: string

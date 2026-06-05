@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from urllib.error import HTTPError, URLError
 from pathlib import Path
 from datetime import datetime, timezone
@@ -541,6 +542,171 @@ def db_reconcile_polymarket_settlements(args: argparse.Namespace) -> int:
         "orders_reconciled_from_trades": orders_reconciled,
         "bets_settled_from_market_resolutions": bets_settled,
         "strategy_id": args.strategy_id,
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+def _build_outcome_mapping(
+    outcomes: list[str],
+    candidate: "LinkCandidate",
+    display_a: str,
+    display_b: str,
+) -> dict[str, str] | None:
+    """Map each market outcome label to 'team_a' / 'team_b' for the linked contest.
+
+    Handles both team-name outcomes (e.g. ["Spirit", "MOUZ"]) and Yes/No markets
+    ("Will X beat Y") where matched_teams[0] is the team that wins on 'Yes'.
+    """
+    from sports.cs.normalization.polymarket_linker import _name_matches
+
+    mapping: dict[str, str] = {}
+    for outcome in outcomes:
+        if _name_matches(outcome, display_a):
+            mapping[outcome] = "team_a"
+        elif _name_matches(outcome, display_b):
+            mapping[outcome] = "team_b"
+    if mapping:
+        return mapping
+
+    lowered = {o.lower() for o in outcomes}
+    if lowered and lowered <= {"yes", "no"}:
+        winner_display = candidate.matched_teams[0]
+        if _name_matches(winner_display, display_a):
+            yes_team = "team_a"
+        elif _name_matches(winner_display, display_b):
+            yes_team = "team_b"
+        else:
+            return None
+        no_team = "team_b" if yes_team == "team_a" else "team_a"
+        for outcome in outcomes:
+            mapping[outcome] = yes_team if outcome.lower() == "yes" else no_team
+        return mapping
+
+    return None
+
+
+# Polymarket also carries non-CS markets (other games leak into the CS event feed).
+# These must never be linked to CS contests, so skip them up front.
+_NON_CS_GAME_RE = re.compile(
+    r"^\s*(dota\s*2?|lol|league of legends|valorant|val|rocket league|r6|rainbow six|"
+    r"overwatch|apex|starcraft|sc2|mobile legends|wild rift|honor of kings|king of glory|"
+    r"pubg|brawl|smash|fifa|eafc|nba|nfl|mlb|nhl|soccer|football|tennis)\b",
+    re.IGNORECASE,
+)
+
+
+def db_link_polymarket_markets(args: argparse.Namespace) -> int:
+    from sports.cs.normalization.polymarket_linker import extract_team_names, link_market_to_contest
+
+    settings = load_settings()
+    scanned = 0
+    non_cs = 0
+    no_teams = 0
+    no_contest = 0
+    below_threshold = 0
+    too_far = 0
+    linked = 0
+    by_confidence: dict[str, int] = {}
+    examples: list[dict[str, Any]] = []
+    max_gap_seconds = args.max_day_gap * 86400.0
+
+    try:
+        with PostgresExecutor(settings.database_url) as db:
+            repo = PostgresRepository(db)
+            participants = repo.list_participants(game_id=args.game_id)
+            contests = repo.list_contests(game_id=args.game_id)
+            display_by_id = {p.participant_id: p.display_name for p in participants}
+            contest_by_id = {c.contest_id: c for c in contests}
+            unlinked = repo.list_unlinked_markets(source=args.source)
+
+            for market in unlinked:
+                scanned += 1
+                question = market["question"]
+
+                if _NON_CS_GAME_RE.search(question):
+                    non_cs += 1
+                    continue
+
+                market_end = market.get("resolved_at") or market.get("created_at")
+                candidate = link_market_to_contest(
+                    question, participants, contests, market_end_date=market_end,
+                )
+                if candidate is None:
+                    if extract_team_names(question) is None:
+                        no_teams += 1
+                    else:
+                        no_contest += 1
+                    continue
+
+                if candidate.confidence < args.min_confidence:
+                    below_threshold += 1
+                    continue
+
+                contest = contest_by_id.get(candidate.contest_id)
+
+                # Temporal sanity gate: a real match market is created close to the
+                # match. If the nearest team-matching contest is far from the market
+                # date, the true contest isn't in our data and this would mislink.
+                gap_days: float | None = None
+                if contest is not None and market_end is not None and contest.starts_at is not None:
+                    gap_seconds = abs((contest.starts_at - market_end).total_seconds())
+                    gap_days = round(gap_seconds / 86400.0, 2)
+                    if gap_seconds > max_gap_seconds:
+                        too_far += 1
+                        continue
+                else:
+                    # No date to verify against — too risky to link blindly.
+                    too_far += 1
+                    continue
+
+                outcome_mapping = _build_outcome_mapping(
+                    market["outcomes"],
+                    candidate,
+                    display_by_id.get(contest.participant_a_id, ""),
+                    display_by_id.get(contest.participant_b_id, ""),
+                )
+
+                conf_key = f"{candidate.confidence:.2f}"
+                by_confidence[conf_key] = by_confidence.get(conf_key, 0) + 1
+
+                if len(examples) < 25:
+                    examples.append({
+                        "market_id": market["market_id"],
+                        "question": question,
+                        "contest_id": candidate.contest_id,
+                        "confidence": candidate.confidence,
+                        "gap_days": gap_days,
+                        "matched_teams": list(candidate.matched_teams),
+                        "outcome_mapping": outcome_mapping,
+                    })
+
+                if not args.dry_run:
+                    repo.update_market_link(
+                        market_id=market["market_id"],
+                        contest_id=candidate.contest_id,
+                        outcome_mapping=outcome_mapping,
+                        link_confidence=candidate.confidence,
+                    )
+                linked += 1
+    except MissingPostgresDriverError as exc:
+        return print_error("missing_postgres_driver", str(exc))
+    except Exception as exc:
+        return print_error("polymarket_link_failed", str(exc))
+
+    print(json.dumps({
+        "dry_run": args.dry_run,
+        "source": args.source,
+        "min_confidence": args.min_confidence,
+        "max_day_gap": args.max_day_gap,
+        "markets_scanned": scanned,
+        "linked": linked,
+        "skipped_non_cs_game": non_cs,
+        "skipped_no_teams_parsed": no_teams,
+        "skipped_no_matching_contest": no_contest,
+        "skipped_below_threshold": below_threshold,
+        "skipped_contest_too_far_in_time": too_far,
+        "linked_by_confidence": by_confidence,
+        "examples": examples,
     }, indent=2, sort_keys=True))
     return 0
 
@@ -2279,6 +2445,31 @@ def main(argv: list[str] | None = None) -> int:
     reconcile_pm_parser.add_argument("--strategy-id")
     reconcile_pm_parser.add_argument("--skip-trades", action="store_true")
     reconcile_pm_parser.set_defaults(func=db_reconcile_polymarket_settlements)
+
+    link_pm_parser = subparsers.add_parser(
+        "db-link-polymarket-markets",
+        help="Link ingested Polymarket markets to HLTV contests by parsing team names from the question.",
+    )
+    link_pm_parser.add_argument("--source", default="polymarket")
+    link_pm_parser.add_argument("--game-id", default=None, help="Restrict to a game_id (e.g. cs).")
+    link_pm_parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.8,
+        help="Minimum link confidence to write (0.8 = teams match a contest; 0.95 = teams + date within 24h).",
+    )
+    link_pm_parser.add_argument(
+        "--max-day-gap",
+        type=float,
+        default=2.0,
+        help="Reject a link if the nearest team-matching contest is more than this many days from the market date.",
+    )
+    link_pm_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be linked without writing contest_id.",
+    )
+    link_pm_parser.set_defaults(func=db_link_polymarket_markets)
 
     parse_fixture_parser = subparsers.add_parser("parse-cs-fixture")
     parse_fixture_parser.add_argument("--path", required=True)

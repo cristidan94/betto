@@ -9,6 +9,7 @@ class MatchEntry(BaseModel):
     tier: str
     format: str
     start: str
+    start_date: str
     start_in: str
     regime: str
     veto: str

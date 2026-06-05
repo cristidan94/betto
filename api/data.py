@@ -7,6 +7,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+# Match times are displayed in Romania local time (handles EET/EEST DST automatically).
+ROMANIA_TZ = ZoneInfo("Europe/Bucharest")
 
 from fastapi import HTTPException
 
@@ -71,11 +75,11 @@ def get_recommendation(rec_id: str) -> RecommendationDetail:
 
 
 def get_matches() -> MatchesResponse:
+    today = datetime.now(ROMANIA_TZ).strftime("%a %d %b %Y")
     if not use_postgres_api():
-        return MatchesResponse(date=datetime.now(timezone.utc).date().isoformat(), matches=[])
+        return MatchesResponse(date=today, matches=[])
     with _repository() as repo:
         rows = repo.list_console_matches(limit=50)
-    today = datetime.now(timezone.utc).date().isoformat()
     return MatchesResponse(date=today, matches=[_match_entry(row) for row in rows])
 
 
@@ -719,6 +723,7 @@ def _match_entry(row: dict[str, Any]) -> MatchEntry:
         tier=str(row.get("tier") or "TBD"),
         format=str(row.get("format") or "unknown"),
         start=_start_time(row.get("starts_at")),
+        start_date=_start_date(row.get("starts_at")),
         start_in=_time_until(row.get("starts_at")),
         regime="LAN",
         veto="open",
@@ -841,7 +846,12 @@ def _state(row: dict[str, Any]) -> str:
 
 def _start_time(value: object) -> str:
     dt = _as_datetime(value)
-    return dt.strftime("%H:%M") if dt is not None else "TBD"
+    return dt.astimezone(ROMANIA_TZ).strftime("%H:%M") if dt is not None else "TBD"
+
+
+def _start_date(value: object) -> str:
+    dt = _as_datetime(value)
+    return dt.astimezone(ROMANIA_TZ).strftime("%a %d %b") if dt is not None else "TBD"
 
 
 def _time_until(value: object) -> str:
